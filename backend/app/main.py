@@ -10,7 +10,7 @@ from backend.app.storage.panels_repo import PanelsRepo
 from backend.app.services.ha_client import HAClient
 from backend.app.services.open_meteo_client import OpenMeteoClient
 from backend.app.services.ha_stats_ws import HAStatsWSClient
-from backend.app.services.ml import PanelModelService, build_training_frame, add_time_features
+from backend.app.services.ml import PanelModelService, build_training_frame, build_training_frame_idxjoin, add_time_features
 
 app = FastAPI(title="PV Panel Predictor")
 
@@ -153,7 +153,7 @@ def train_panel(panel_id: str, days: int = 365):
     if meteo_hist.empty:
         raise HTTPException(status_code=502, detail="Open-Meteo archive returned empty data")
 
-    df = build_training_frame(energy, meteo_hist)
+    df = build_training_frame_idxjoin(energy, meteo_hist)
 
     if len(df) < 72:
         raise HTTPException(status_code=400, detail=f"Not enough joined rows to train: {len(df)}")

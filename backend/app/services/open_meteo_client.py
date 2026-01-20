@@ -77,7 +77,8 @@ class OpenMeteoClient:
 
         # When timezone param is set, Open-Meteo returns local timestamps; ensure tz-aware
         if df.index.tz is None:
-            df.index = df.index.tz_localize(timezone)
+            df.index = df.index.tz_localize(timezone, ambiguous="NaT", nonexistent="shift_forward")
+        df = df[~df.index.isna()]
 
         return df
 

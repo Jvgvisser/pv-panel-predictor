@@ -149,3 +149,42 @@ class PanelModelService:
             pred = np.where(feature_df["global_tilted_irradiance"].to_numpy() <= 0.5, 0.0, pred)
 
         return pred
+
+def build_training_frame_idxjoin(energy: pd.DataFrame, meteo: pd.DataFrame) -> pd.DataFrame:
+    """
+    DST-safe training frame builder.
+    Joins energy and meteo on DatetimeIndex (no merge on 'time' column).
+    """
+    e = energy.copy()
+    m = meteo.copy()
+
+    if "time" in e.columns and not isinstance(e.index, pd.DatetimeIndex):
+        e["time"] = pd.to_datetime(e["time"], utc=True, errors="coerce")
+        e = e.dropna(subset=["time"]).set_index("time")
+    if "time" in m.columns and not isinstance(m.index, pd.DatetimeIndex):
+        m["time"] = pd.to_datetime(m["time"], utc=True, errors="coerce")
+        m = m.dropna(subset=["time"]).set_index("time")
+
+    if not isinstance(e.index, pd.DatetimeIndex) or not isinstance(m.index, pd.DatetimeIndex):
+        raise ValueError("energy/meteo must have a DatetimeIndex (or a 'time' column to set index)")
+
+    if e.index.tz is None and m.index.tz is not None:
+        e.index = e.index.tz_localize("UTC")
+    if m.index.tz is None and e.index.tz is not None:
+        m.index = m.index.tz_localize("UTC")
+
+    if "time" in e.columns:
+        e = e.drop(columns=["time"])
+    if "time" in m.columns:
+        m = m.drop(columns=["time"])
+
+    df = e.join(m, how="inner").sort_index()
+
+    df["kwh_lag_24"] = df["kwh"].shift(24)
+    if "global_tilted_irradiance" in df.columns:
+        df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24)
+
+    df = add_time_features(df)
+    df = df.dropna()
+    return df
+
