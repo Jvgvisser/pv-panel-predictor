@@ -24,33 +24,31 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     return out
 
 
-def build_training_frame(
-    energy_hourly: pd.DataFrame,  # columns: ts, kwh
-    meteo_hourly: pd.DataFrame,   # columns: time, ...
-) -> pd.DataFrame:
-    e = energy_hourly.copy()
-    # drop tz for merge (meteo times are local)
-    e["time"] = pd.to_datetime(e["ts"]).dt.tz_localize(None)
-    e = e.drop(columns=["ts"])
+def build_training_frame(energy, meteo):
+    import pandas as pd
 
-    m = meteo_hourly.copy()
-    m["time"] = pd.to_datetime(m["time"])
+    def norm(df):
+        df = df.copy()
+
+        # if time zit in index → reset
+        if df.index.name == "time" or "time" in getattr(df.index, "names", []):
+            df = df.reset_index()
+
+        if "time" not in df.columns:
+            raise KeyError("time")
+
+        df["time"] = pd.to_datetime(df["time"], errors="coerce")
+        df = df.dropna(subset=["time"])
+
+        df = df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
+        return df
+
+    m = norm(meteo)
+    e = norm(energy)
 
     df = pd.merge(m, e, on="time", how="inner").sort_values("time")
-
-    # Lag features
-    df["kwh_lag_24"] = df["kwh"].shift(24).fillna(0.0)
-    df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
-
-
-    df["kwh_lag_168"] = df["kwh"].shift(168).fillna(0.0)
-    df["gti_lag_168"] = df["global_tilted_irradiance"].shift(168).fillna(0.0)
-    df = add_time_features(df, "time")
-    df = df.dropna()
     return df
 
-
-@dataclass
 class TrainedModel:
     model: LGBMRegressor
     features: list
