@@ -42,6 +42,9 @@ def build_training_frame(
     df["kwh_lag_24"] = df["kwh"].shift(24).fillna(0.0)
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
 
+
+    df["kwh_lag_168"] = df["kwh"].shift(168).fillna(0.0)
+    df["gti_lag_168"] = df["global_tilted_irradiance"].shift(168).fillna(0.0)
     df = add_time_features(df, "time")
     df = df.dropna()
     return df
@@ -139,4 +142,10 @@ class PanelModelService:
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
         X = feature_df[trained.features]
         pred = trained.model.predict(X)
-        return np.clip(pred, 0, None)
+        pred = np.clip(pred, 0, None)
+
+        # Force nights to zero (no irradiance)
+        if "global_tilted_irradiance" in feature_df.columns:
+            pred = np.where(feature_df["global_tilted_irradiance"].to_numpy() <= 0.5, 0.0, pred)
+
+        return pred
