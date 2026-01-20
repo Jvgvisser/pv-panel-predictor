@@ -145,6 +145,10 @@ def evcc_solar(days: int = 2, interval: str = "1h"):
     out = []
     # Sort times
     times = sorted(totals.keys())
+    # Limit to requested horizon
+    step_hours = 1 if interval == "1h" else 0.5
+    max_points = int(days * 24 / step_hours)
+    times = times[:max_points]
     for t in times:
         kwh = totals[t]
         # Parse ISO with timezone; evcc examples use Z, but offsets are fine too.
@@ -164,7 +168,7 @@ def evcc_solar(days: int = 2, interval: str = "1h"):
         out.append({
             "start": dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "value": round(watts, 1),
+            "value": int(round(watts)),
         })
 
     return out
