@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+requests
+pandas
+python-dateutil
+requests
+pandas
+python-dateutil
+scikit-learn
+joblib
+scikit-learn
+joblib
