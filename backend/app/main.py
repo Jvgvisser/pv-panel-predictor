@@ -118,6 +118,58 @@ def train_panel(panel_id: str, days: int = 365):
     return {"ok": True, "panel_id": panel_id, "rows": int(len(df)), "metrics": metrics}
 
 
+@app.get("/api/evcc/solar")
+def evcc_solar(days: int = 2, interval: str = "1h"):
+    """
+    evcc custom solar forecast endpoint.
+    Returns JSON array: [{start,end,value}] where value is PV power in Watt.
+    """
+    # reuse existing logic: predict all panels and sum (existing endpoint handler likely exists)
+    # If you already have a function for total forecast, call that instead.
+    results = predict_all(days=days)  # expects {"ok":True,"days":...,"results":[...]}
+    # Sum per-hour kWh
+    totals = {}
+    for r in results.get("results", []):
+        if not r.get("ok"):
+            continue
+        fc = r["result"].get("forecast", [])
+        for item in fc:
+            t = item["time"]
+            totals[t] = totals.get(t, 0.0) + float(item.get("kwh", 0.0))
+
+    # Convert to evcc list
+    # interval supported: "1h" or "30m"
+    if interval not in ("1h", "30m"):
+        interval = "1h"
+
+    out = []
+    # Sort times
+    times = sorted(totals.keys())
+    for t in times:
+        kwh = totals[t]
+        # Parse ISO with timezone; evcc examples use Z, but offsets are fine too.
+        # We'll output UTC (Z) for compatibility.
+        # Convert "2026-01-20T09:00:00+01:00" -> UTC Z
+        import datetime as _dt
+        dt = _dt.datetime.fromisoformat(t.replace("Z", "+00:00"))
+        dt_utc = dt.astimezone(_dt.timezone.utc)
+
+        if interval == "1h":
+            end_utc = dt_utc + _dt.timedelta(hours=1)
+            watts = kwh * 1000.0
+        else:  # 30m
+            end_utc = dt_utc + _dt.timedelta(minutes=30)
+            watts = kwh * 2000.0
+
+        out.append({
+            "start": dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "value": round(watts, 1),
+        })
+
+    return out
+
+
 @app.get("/api/panels/{panel_id}/predict")
 def predict_panel(panel_id: str, days: int = 7):
     try:
