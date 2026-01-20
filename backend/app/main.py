@@ -168,3 +168,27 @@ def predict_panel_ha(panel_id: str, days: int = 7):
         "hours": res["hours"],
         "forecast": compact,
     }
+
+
+@app.post("/api/train_all")
+def train_all(days: int = 365):
+    results = []
+    for panel in repo.list():
+        try:
+            r = train_panel(panel.panel_id, days=days)
+            results.append({"panel_id": panel.panel_id, "ok": True, "result": r})
+        except Exception as e:
+            results.append({"panel_id": panel.panel_id, "ok": False, "error": str(e)})
+    return {"ok": True, "days": days, "results": results}
+
+
+@app.get("/api/predict_all")
+def predict_all(days: int = 7):
+    results = []
+    for panel in repo.list():
+        try:
+            r = predict_panel(panel.panel_id, days=days)
+            results.append({"panel_id": panel.panel_id, "ok": True, "result": r})
+        except Exception as e:
+            results.append({"panel_id": panel.panel_id, "ok": False, "error": str(e)})
+    return {"ok": True, "days": days, "results": results}
