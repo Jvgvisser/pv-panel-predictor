@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
+from lightgbm import LGBMRegressor
 from sklearn.metrics import mean_absolute_error
 
 
 def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
     t = pd.to_datetime(out[time_col])
+
     out["hour"] = t.dt.hour
     out["doy"] = t.dt.dayofyear
 
@@ -29,16 +29,16 @@ def build_training_frame(
     meteo_hourly: pd.DataFrame,   # columns: time, ...
 ) -> pd.DataFrame:
     e = energy_hourly.copy()
-    e["time"] = pd.to_datetime(e["ts"]).dt.tz_localize(None)  # drop tz for merge
+    # drop tz for merge (meteo times are local)
+    e["time"] = pd.to_datetime(e["ts"]).dt.tz_localize(None)
     e = e.drop(columns=["ts"])
 
     m = meteo_hourly.copy()
     m["time"] = pd.to_datetime(m["time"])
 
-    df = pd.merge(m, e, on="time", how="inner")
-    df = df.sort_values("time")
+    df = pd.merge(m, e, on="time", how="inner").sort_values("time")
 
-    # simple lag features (previous day same hour)
+    # Lag features
     df["kwh_lag_24"] = df["kwh"].shift(24).fillna(0.0)
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
 
@@ -49,7 +49,7 @@ def build_training_frame(
 
 @dataclass
 class TrainedModel:
-    model: HistGradientBoostingRegressor
+    model: LGBMRegressor
     features: list
 
 
@@ -64,7 +64,6 @@ class PanelModelService:
         return d
 
     def train(self, panel_id: str, df: pd.DataFrame) -> dict:
-        # Define features
         features = [
             "global_tilted_irradiance",
             "shortwave_radiation",
@@ -76,34 +75,58 @@ class PanelModelService:
             "doy_sin", "doy_cos",
         ]
 
-        # Train/val split: last 7 days as validation (168 hours)
         df = df.sort_values("time")
+
+        # Validation: last 7 days (168h) when available
         val_n = min(168, max(24, int(len(df) * 0.15)))
         train_df = df.iloc[:-val_n] if len(df) > val_n else df
         val_df = df.iloc[-val_n:] if len(df) > val_n else df.iloc[0:0]
 
-        X_train = train_df[features].to_numpy()
-        y_train = train_df["kwh"].to_numpy()
+        X_train = train_df[features]
+        y_train = train_df["kwh"]
 
-        model = HistGradientBoostingRegressor(
-            loss="squared_error",
-            max_depth=6,
-            learning_rate=0.08,
-            max_iter=400,
+        # LightGBM settings: good default for 1 year hourly series
+        model = LGBMRegressor(
+            n_estimators=1200,
+            learning_rate=0.03,
+            num_leaves=31,
+            min_child_samples=12,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            reg_alpha=0.0,
+            reg_lambda=0.0,
             random_state=42,
+            n_jobs=-1,
         )
-        model.fit(X_train, y_train)
 
+        # Early stopping if we have a validation set
         metrics = {"train_rows": int(len(train_df))}
         if len(val_df) > 0:
-            X_val = val_df[features].to_numpy()
-            y_val = val_df["kwh"].to_numpy()
-            pred = model.predict(X_val)
-            pred = np.clip(pred, 0, None)
+            X_val = val_df[features]
+            y_val = val_df["kwh"]
+
+            model.fit(
+                X_train, y_train,
+                eval_set=[(X_val, y_val)],
+                eval_metric="l1",
+                callbacks=[],
+            )
+
+            pred = np.clip(model.predict(X_val), 0, None)
             metrics["val_rows"] = int(len(val_df))
             metrics["val_mae_kwh"] = float(mean_absolute_error(y_val, pred))
+            metrics["best_iteration"] = int(getattr(model, "best_iteration_", model.n_estimators))
+        else:
+            model.fit(X_train, y_train)
 
-        # Save
+        # Feature importance (handig voor debug)
+        try:
+            imp = list(zip(features, model.feature_importances_.tolist()))
+            imp.sort(key=lambda x: x[1], reverse=True)
+            metrics["feature_importance"] = imp[:8]
+        except Exception:
+            pass
+
         d = self._panel_dir(panel_id)
         joblib.dump({"model": model, "features": features}, d / "model.joblib")
         return metrics
@@ -114,6 +137,6 @@ class PanelModelService:
         return TrainedModel(model=obj["model"], features=obj["features"])
 
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
-        X = feature_df[trained.features].to_numpy()
+        X = feature_df[trained.features]
         pred = trained.model.predict(X)
         return np.clip(pred, 0, None)

@@ -11,3 +11,4 @@ scikit-learn
 joblib
 scikit-learn
 joblib
+lightgbm
