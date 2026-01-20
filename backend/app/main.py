@@ -9,11 +9,55 @@ from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
 from backend.app.services.ha_client import HAClient
 from backend.app.services.open_meteo_client import OpenMeteoClient
+from backend.app.services.ha_stats_ws import HAStatsWSClient
 from backend.app.services.ml import PanelModelService, build_training_frame, add_time_features
 
 app = FastAPI(title="PV Panel Predictor")
 
 repo = PanelsRepo()
+
+def _fetch_panel_kwh_stats(panel, days: int):
+    """
+    Fetch hourly kWh using HA long-term statistics via websocket.
+
+    For energy sensors with state_class total_increasing, HA stats returns 'sum' in kWh.
+    We convert to hourly deltas.
+    """
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime, timezone
+
+    ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
+    points = ws.fetch_hourly_energy_kwh_from_stats(panel.entity_id, days=days, now=datetime.now(timezone.utc))
+    if not points:
+        return pd.DataFrame({"kwh": []}, index=pd.DatetimeIndex([], tz="Europe/Amsterdam"))
+
+    # choose 'sum' if present, else 'state', else 'mean'
+    def pick(p):
+        for k in ("sum", "state", "mean"):
+            if k in p and p[k] is not None:
+                return float(p[k])
+        return None
+
+    rows = []
+    for pt in points:
+        start = pt.get("start") or pt.get("start_time") or pt.get("time")
+        val = pick(pt)
+        if start is None or val is None:
+            continue
+        rows.append((pd.to_datetime(start, utc=True).tz_convert("Europe/Amsterdam"), val))
+
+    if not rows:
+        return pd.DataFrame({"kwh": []}, index=pd.DatetimeIndex([], tz="Europe/Amsterdam"))
+
+    rows.sort(key=lambda x: x[0])
+    s = pd.Series([v for _, v in rows], index=pd.DatetimeIndex([t for t, _ in rows]))
+    # convert total kWh -> hourly kWh delta
+    kwh = s.diff().fillna(0.0).clip(lower=0.0)
+
+    # some sensors may be Wh in stats (rare). If your totals look 1000x too big/small we adjust later.
+    return pd.DataFrame({"kwh": kwh})
+
 ms = PanelModelService()
 meteo = OpenMeteoClient()
 
