@@ -1,0 +1,40 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Model performance evaluation",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "predictor/performance_testing.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python Debugger: FastAPI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "predictor.api.priceapi:app",
+                "--reload"
+            ],
+            "env": {
+                "EPEXPREDICTOR_DATADIR": "."
+            },
+            "jinja": true
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "EPEXPREDICTOR_DATADIR": ".",
+            },
+        }
+    ]
+}
