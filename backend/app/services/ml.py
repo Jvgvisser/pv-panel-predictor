@@ -35,18 +35,57 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     return out
 
 
+def _ensure_dtindex(obj, *, kind: str) -> pd.DataFrame:
+    """
+    Make sure we have a DataFrame with a tz-aware UTC DatetimeIndex.
+    Accepts:
+      - pd.Series (becomes DataFrame)
+      - pd.DataFrame with DatetimeIndex
+      - pd.DataFrame with a time-like column: time/start/datetime/timestamp/date/last_changed
+    """
+    if isinstance(obj, pd.Series):
+        df = obj.to_frame(name=kind)
+    else:
+        df = obj.copy()
+
+    # Already good?
+    if isinstance(df.index, pd.DatetimeIndex):
+        idx = df.index
+        if idx.tz is None:
+            df.index = idx.tz_localize("UTC")
+        else:
+            df.index = idx.tz_convert("UTC")
+        return df
+
+    # Try find a usable time column
+    candidates = ["time", "start", "datetime", "timestamp", "date", "last_changed", "last_updated"]
+    col = next((c for c in candidates if c in df.columns), None)
+    if col is None:
+        # Sometimes it's nested under index name
+        if df.index.name in candidates:
+            df = df.reset_index()
+            col = df.columns[0]  # the reset index column
+        else:
+            raise ValueError(f"{kind} must have DatetimeIndex or one of columns {candidates}. Got columns={list(df.columns)}")
+
+    t = pd.to_datetime(df[col], utc=True, errors="coerce")
+    df = df.assign(_time=t).dropna(subset=["_time"]).drop(columns=[c for c in [col] if c in df.columns])
+    df = df.set_index("_time").sort_index()
+
+    # Remove duplicate timestamps (keep last)
+    df = df[~df.index.duplicated(keep="last")]
+    return df
+
+
 def build_training_frame(energy: pd.DataFrame, meteo: pd.DataFrame) -> pd.DataFrame:
-    """
-    Backwards compatible entrypoint used elsewhere in the app.
-    We route everything through the DST-safe index-join builder.
-    """
+    # Always use DST-safe index-join variant
     return build_training_frame_idxjoin(energy, meteo)
 
 
 @dataclass
 class TrainedModel:
     model: LGBMRegressor
-    features: list[str]
+    features: list
 
 
 class PanelModelService:
@@ -71,15 +110,7 @@ class PanelModelService:
             "doy_sin", "doy_cos",
         ]
 
-        if "time" not in df.columns:
-            # if someone passes an indexed df, keep it usable
-            if isinstance(df.index, pd.DatetimeIndex):
-                df = df.copy()
-                df["time"] = df.index
-            else:
-                raise ValueError("train(): expected df with 'time' column or DatetimeIndex")
-
-        df = df.sort_values("time")
+        df = df.sort_values("time") if "time" in df.columns else df.sort_index()
 
         # Validation: last 7 days (168h) when available
         val_n = min(168, max(24, int(len(df) * 0.15)))
@@ -102,7 +133,7 @@ class PanelModelService:
             n_jobs=-1,
         )
 
-        metrics: dict = {"train_rows": int(len(train_df))}
+        metrics = {"train_rows": int(len(train_df))}
         if len(val_df) > 0:
             X_val = val_df[features]
             y_val = val_df["kwh"]
@@ -151,59 +182,33 @@ class PanelModelService:
 def build_training_frame_idxjoin(energy: pd.DataFrame, meteo: pd.DataFrame) -> pd.DataFrame:
     """
     DST-safe training frame builder.
-    Joins energy and meteo on DatetimeIndex (no merge on 'time' column).
-    Output includes a 'time' column for downstream code that expects it.
+    Robustly coerces both inputs to UTC DatetimeIndex and joins on index.
     """
-    e = energy.copy()
-    m = meteo.copy()
+    e = _ensure_dtindex(energy, kind="energy")
+    m = _ensure_dtindex(meteo, kind="meteo")
 
-    # Accept either "time" column or DatetimeIndex
-    if "time" in e.columns and not isinstance(e.index, pd.DatetimeIndex):
-        e["time"] = pd.to_datetime(e["time"], utc=True, errors="coerce")
-        e = e.dropna(subset=["time"]).set_index("time")
-    if "time" in m.columns and not isinstance(m.index, pd.DatetimeIndex):
-        m["time"] = pd.to_datetime(m["time"], utc=True, errors="coerce")
-        m = m.dropna(subset=["time"]).set_index("time")
+    # Normalize expected column names for energy
+    # We expect kwh column. If HA returns "value", rename it.
+    if "kwh" not in e.columns:
+        if "value" in e.columns:
+            e = e.rename(columns={"value": "kwh"})
+        elif e.shape[1] == 1:
+            e = e.rename(columns={e.columns[0]: "kwh"})
 
-    if not isinstance(e.index, pd.DatetimeIndex) or not isinstance(m.index, pd.DatetimeIndex):
-        raise ValueError("energy/meteo must have a DatetimeIndex (or a 'time' column to set index)")
+    if "kwh" not in e.columns:
+        raise ValueError(f"energy must contain kwh/value column. Got columns={list(e.columns)}")
 
-    # Normalize tz to UTC
-    if e.index.tz is None:
-        e.index = e.index.tz_localize("UTC")
-    else:
-        e.index = e.index.tz_convert("UTC")
-
-    if m.index.tz is None:
-        m.index = m.index.tz_localize("UTC")
-    else:
-        m.index = m.index.tz_convert("UTC")
-
-    # If someone left a 'time' column behind, drop it to avoid ambiguity
-    if "time" in e.columns:
-        e = e.drop(columns=["time"])
-    if "time" in m.columns:
-        m = m.drop(columns=["time"])
-
-    # Join on index (UTC hourly timeline)
+    # Join + sort
     df = e.join(m, how="inner").sort_index()
 
-    # Lags
-    if "kwh" in df.columns:
-        df["kwh_lag_24"] = df["kwh"].shift(24)
-    else:
-        raise ValueError("Expected 'kwh' in energy data")
-
+    # Build lags
+    df["kwh_lag_24"] = df["kwh"].shift(24)
     if "global_tilted_irradiance" in df.columns:
         df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24)
 
-    # Provide time column too
+    # Keep time column (for parts of pipeline expecting it)
     df["time"] = df.index
 
-    # Time features (works on column or index)
-    df = add_time_features(df)
-
-    # Drop rows where lag/features are missing
+    df = add_time_features(df, time_col="time")
     df = df.dropna()
     return df
-
