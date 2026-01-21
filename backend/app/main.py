@@ -19,13 +19,10 @@ ms = PanelModelService()
 async def _fetch_panel_kwh_stats(panel, days: int):
     """Fetch hourly kWh using HA long-term statistics via websocket."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
-    
-    # Gebruik een harde UTC timestamp voor 'now'
     now_dt = datetime.now(timezone.utc)
     
     print(f"DEBUG: Vraag data op bij Hass voor {panel.entity_id} (Dagen: {days})")
     
-    # VOEGE HIER 'await' TOE OMDAT DE WS CLIENT NU ASYNC IS
     points = await ws.fetch_hourly_energy_kwh_from_stats(
         panel.entity_id, 
         days=days, 
@@ -37,23 +34,36 @@ async def _fetch_panel_kwh_stats(panel, days: int):
         return pd.DataFrame()
 
     df = pd.DataFrame(points)
-    # Zoek naar beschikbare kolom (LTS gebruikt meestal 'sum')
-    col = next((c for c in ["sum", "state", "mean"] if c in df.columns), None)
     
-    if col is None:
-        print(f"❌ Geen bruikbare kolom gevonden in: {df.columns}")
+    # Check welke kolom HA ons geeft (meestal 'sum' bij LTS)
+    # We proberen 'sum', dan 'state', dan 'mean'
+    target_col = None
+    for c in ["sum", "state", "mean"]:
+        if c in df.columns and df[c].notna().any():
+            target_col = c
+            break
+    
+    if target_col is None:
+        print(f"❌ Geen bruikbare data-kolom gevonden. Beschikbaar: {df.columns.tolist()}")
         return pd.DataFrame()
     
+    print(f"✅ Gebruik kolom '{target_col}' voor berekening.")
+
+    # Tijd goedzetten
     df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("h")
     df = df.set_index("time").sort_index()
     df = df[~df.index.duplicated(keep='first')]
     
-    series = df[col].astype(float)
-    # Bereken verschil (Wh naar Wh per uur)
+    # Bereken het verschil tussen de uren (omdat het een teller is)
+    series = df[target_col].astype(float)
     hourly_diff = series.diff().clip(lower=0)
     
-    # Pas schaling toe naar kWh (sensor is Wh)
-    return (hourly_diff * 0.001).to_frame(name="kwh").dropna()
+    # Schaling: we weten dat de sensor Wh is, we willen kWh
+    # 1447181 Wh -> diff is bijv 500 Wh -> * 0.001 -> 0.5 kWh
+    result_df = (hourly_diff * 0.001).to_frame(name="kwh").dropna()
+    
+    print(f"📊 Na verwerking: {len(result_df)} rijen aan uurverbruik.")
+    return result_df
 
 @app.post("/api/panels/{panel_id}/train")
 async def train_panel(panel_id: str, days: int = 30):
