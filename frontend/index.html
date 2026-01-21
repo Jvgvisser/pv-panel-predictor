@@ -80,7 +80,7 @@
                     <div class="mb-3">
                         <div class="flex justify-between items-center">
                             <span class="font-mono font-bold text-blue-600 text-lg">${p.id}</span>
-                            <span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500">HA Sensor</span>
+                            <span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500 font-bold uppercase tracking-widest">${p.panel_id || p.id}</span>
                         </div>
                         <p class="text-[10px] text-gray-400 truncate">${p.entity_id}</p>
                     </div>
@@ -94,18 +94,27 @@
         }
 
         async function trainOne(id) {
-            const btn = event.target;
+            const btn = event.currentTarget;
+            const originalText = btn.innerText;
             btn.classList.add('loading');
             btn.innerText = 'Bezig...';
+            
             try {
                 const res = await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
                 const data = await res.json();
-                alert(`${id}: ${data.ok ? 'Training voltooid!' : 'Fout opgetreden'}`);
+                
+                if (data.ok || data.metrics) {
+                    alert(`Succes: Paneel ${id} is getraind!`);
+                } else {
+                    alert(`Fout bij ${id}: ${data.detail || 'Onbekende fout'}`);
+                }
             } catch (e) {
-                alert(`Fout bij verbinding met server voor ${id}`);
+                alert(`Netwerkfout bij trainen van ${id}`);
+            } finally {
+                btn.classList.remove('loading');
+                btn.innerText = originalText;
+                init();
             }
-            btn.classList.remove('loading');
-            btn.innerText = 'Train';
         }
 
         async function trainAll() {
@@ -119,8 +128,8 @@
             
             for(let p of panels) {
                 try {
+                    console.log(`Training ${p.id}...`);
                     await fetch(`/api/panels/${p.id}/train?days=365`, { method: 'POST' });
-                    console.log(`Klaar met ${p.id}`);
                 } catch (e) { console.error(`Fout bij ${p.id}`); }
             }
             
@@ -208,11 +217,20 @@
             const res = await fetch(`/api/panels/${id}/predict?days=7`);
             const data = await res.json();
             if(data.ok) {
-                renderLineChart(data.forecast.reduce((acc, curr) => {
+                const hourlyMap = data.forecast.reduce((acc, curr) => {
                     acc[curr.time] = curr.kwh;
                     return acc;
-                }, {}));
-                alert(`Grafiek tijdelijk aangepast naar alleen paneel ${id}`);
+                }, {});
+                renderLineChart(hourlyMap);
+                
+                const dailyMap = data.forecast.reduce((acc, curr) => {
+                    const day = curr.time.split('T')[0];
+                    acc[day] = (acc[day] || 0) + curr.kwh;
+                    return acc;
+                }, {});
+                renderBarChart(dailyMap);
+                
+                alert(`Grafieken tonen nu alleen data voor paneel ${id}. Klik op 'Ververs Data' voor het totaal.`);
             }
         }
 
