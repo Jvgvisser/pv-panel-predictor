@@ -110,6 +110,12 @@ class PanelModelService:
             "doy_sin", "doy_cos",
         ]
 
+        # Ensure all expected feature columns exist
+        for col in features:
+            if col not in df.columns:
+                df[col] = 0.0
+
+
         df = df.sort_values("time") if "time" in df.columns else df.sort_index()
 
         # Validation: last 7 days (168h) when available
