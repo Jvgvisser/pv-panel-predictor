@@ -10,7 +10,7 @@ from backend.app.storage.panels_repo import PanelsRepo
 from backend.app.services.ha_client import HAClient
 from backend.app.services.open_meteo_client import OpenMeteoClient
 from backend.app.services.ha_stats_ws import HAStatsWSClient
-from backend.app.services.ml import PanelModelService, build_training_frame, build_training_frame_idxjoin, add_time_features
+from backend.app.services.ml import PanelModelService, add_time_features
 
 app = FastAPI(title="PV Panel Predictor")
 
@@ -42,13 +42,13 @@ def _fetch_panel_kwh_stats(panel, days: int):
 def train_panel(panel_id: str, days: int = 30):
     try:
         panel = repo.get(panel_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Panel niet gevonden")
 
     # 1. Haal energie data op
     energy_df = _fetch_panel_kwh_stats(panel, days=days)
     
-    # 2. Haal historische weerdata op
+    # 2. Haal historische weer data op
     meteo_df = meteo.fetch_history_days(
         latitude=panel.latitude,
         longitude=panel.longitude,
@@ -57,8 +57,14 @@ def train_panel(panel_id: str, days: int = 30):
         azimuth_deg=panel.azimuth_deg,
     )
 
-    # 3. Combineer data en train model
-    train_df = build_training_frame(energy_df, meteo_df)
+    # 3. Combineer data (Join op tijd/index)
+    # We doen nu een simpele join hier omdat build_training_frame weg is
+    train_df = energy_df.join(meteo_df, how="inner").dropna()
+    
+    # Voeg tijd features toe voor training
+    train_df = add_time_features(train_df)
+
+    # 4. Train model
     metrics = ms.train(panel_id, train_df)
     
     return {"ok": True, "metrics": metrics}
