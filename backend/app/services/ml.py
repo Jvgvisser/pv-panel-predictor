@@ -26,7 +26,9 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
         raise ValueError("add_time_features: need 'time' column or DatetimeIndex")
 
     out["hour"] = (t.dt.hour if hasattr(t, "dt") else t.hour)
-    out["doy"] = (t.dt.dayofyear if hasattr(t, "dt") else t.dayofyear)out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24.0)
+    out["doy"] = (t.dt.dayofyear if hasattr(t, "dt") else t.dayofyear)
+
+    out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24.0)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24.0)
     out["doy_sin"] = np.sin(2 * np.pi * out["doy"] / 365.25)
     out["doy_cos"] = np.cos(2 * np.pi * out["doy"] / 365.25)
