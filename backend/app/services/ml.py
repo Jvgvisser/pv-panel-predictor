@@ -175,7 +175,21 @@ class PanelModelService:
         return TrainedModel(model=obj["model"], features=obj["features"])
 
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
-        X = feature_df[trained.features]
+        # Ensure we always have all trained features available at prediction time.
+# Open-Meteo fields may be missing (or models may have been trained with older/newer feature sets).
+missing = [c for c in trained.features if c not in feature_df.columns]
+if missing:
+    for c in missing:
+        feature_df[c] = 0.0
+
+# Ensure we always have all trained features available at prediction time.
+# Open-Meteo fields may be missing (or models may have been trained with older/newer feature sets).
+missing = [c for c in trained.features if c not in feature_df.columns]
+if missing:
+    for c in missing:
+        feature_df[c] = 0.0
+
+X = feature_df[trained.features]
         pred = trained.model.predict(X)
         pred = np.clip(pred, 0, None)
 
