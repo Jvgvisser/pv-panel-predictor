@@ -58,7 +58,7 @@ def _ensure_dtindex(obj, *, kind: str) -> pd.DataFrame:
         return df
 
     # Try find a usable time column
-    candidates = ["time", "start", "datetime", "timestamp", "date", "last_changed", "last_updated"]
+    candidates = ["time", "ts", "start", "end", "datetime", "timestamp", "date", "last_changed", "last_updated"]
     col = next((c for c in candidates if c in df.columns), None)
     if col is None:
         # Sometimes it's nested under index name
