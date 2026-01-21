@@ -176,20 +176,13 @@ class PanelModelService:
 
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
         # Ensure we always have all trained features available at prediction time.
-# Open-Meteo fields may be missing (or models may have been trained with older/newer feature sets).
-missing = [c for c in trained.features if c not in feature_df.columns]
-if missing:
-    for c in missing:
-        feature_df[c] = 0.0
+        # Open-Meteo fields may be missing (or models may have been trained with older/newer feature sets).
+        # Ensure all features used at training time exist at prediction time
+        for _col in trained.features:
+            if _col not in feature_df.columns:
+                feature_df[_col] = 0.0
 
-# Ensure we always have all trained features available at prediction time.
-# Open-Meteo fields may be missing (or models may have been trained with older/newer feature sets).
-missing = [c for c in trained.features if c not in feature_df.columns]
-if missing:
-    for c in missing:
-        feature_df[c] = 0.0
-
-X = feature_df[trained.features]
+        X = feature_df[trained.features]
         pred = trained.model.predict(X)
         pred = np.clip(pred, 0, None)
 
@@ -214,7 +207,7 @@ def build_training_frame_idxjoin(energy: pd.DataFrame, meteo: pd.DataFrame) -> p
             e = e.rename(columns={"value": "kwh"})
         elif e.shape[1] == 1:
             e = e.rename(columns={e.columns[0]: "kwh"})
-
+    
     if "kwh" not in e.columns:
         raise ValueError(f"energy must contain kwh/value column. Got columns={list(e.columns)}")
 
