@@ -247,7 +247,8 @@ def predict_panel(panel_id: str, days: int = 7):
     pred = ms.predict(trained, df)
 
     out = []
-    times = pd.to_datetime(df["time"])
+    if "time" in df.columns: times = pd.to_datetime(df["time"])
+        else: times = pd.to_datetime(df.index)
     # Treat Open-Meteo times as Europe/Amsterdam local time, then output with offset
     times = times.dt.tz_localize("Europe/Amsterdam", nonexistent="shift_forward", ambiguous="NaT")
 
