@@ -67,48 +67,39 @@ def train_panel(panel_id: str, days: int = 30):
 def predict_panel(panel_id: str, days: int = 7):
     try:
         panel = repo.get(panel_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Paneel niet gevonden")
 
-    try:
-        trained = ms.load(panel_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Model not trained yet")
+    trained = ms.load(panel_id)
 
+    # Haal forecast op
     meteo_fc = meteo.fetch_hourly_forecast(
-        latitude=panel.latitude,
-        longitude=panel.longitude,
-        days=days,
-        tilt_deg=panel.tilt_deg,
-        azimuth_deg=panel.azimuth_deg,
-        timezone="Europe/Amsterdam",
+        latitude=panel.latitude, longitude=panel.longitude,
+        days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
+        timezone="Europe/Amsterdam"
     )
 
-    if meteo_fc.empty:
-        raise HTTPException(status_code=502, detail="Open-Meteo forecast returned empty data")
-
     df = meteo_fc.copy()
-    df["kwh_lag_24"] = 0.0
+    
+    # Maak de features aan die LightGBM verwacht
+    df["kwh_lag_24"] = 0.0  # In live predictie hebben we geen echte lag van gisteren
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
     
-    # Fix voor de KeyError: zorg dat 'time' kolom bestaat vanuit de index
+    # Fix voor de tijd kolom
     if "time" not in df.columns:
         df["time"] = df.index
-        
-    df = add_time_features(df, "time")
 
+    df = add_time_features(df, "time")
+    
+    # Doe de voorspelling met het LightGBM model
     pred = ms.predict(trained, df)
 
     out = []
-    times = pd.to_datetime(df["time"])
-    
-    if times.dt.tz is None:
-        times = times.dt.tz_localize("Europe/Amsterdam", nonexistent="shift_forward", ambiguous="NaT")
-
+    times = pd.to_datetime(df["time"]).dt.tz_localize("Europe/Amsterdam", nonexistent="shift_forward", ambiguous="NaT")
     for t, y in zip(times, pred):
         out.append({"time": t.isoformat(), "kwh": float(y)})
 
-    return {"ok": True, "panel_id": panel_id, "hours": len(out), "forecast": out}
+    return {"ok": True, "panel_id": panel_id, "forecast": out}
 
 @app.get("/api/panels")
 def list_panels():
