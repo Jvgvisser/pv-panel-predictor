@@ -8,6 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .loading { cursor: wait; opacity: 0.5; pointer-events: none; }
+        .chart-container { position: relative; height: 320px; width: 100%; }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen p-4 font-sans">
@@ -16,13 +17,13 @@
         <header class="mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-b-4 border-yellow-400">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Zonnepanelen Voorspeller</h1>
-                <p class="text-gray-500 font-medium">Systeem: 28 Panelen in Voorburg</p>
+                <p class="text-gray-500 font-medium text-lg">Systeem: 28 Panelen in Voorburg</p>
             </div>
-            <div class="mt-4 md:mt-0 space-x-2">
-                <button onclick="init()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
-                    🔄 Ververs Data
+            <div class="mt-4 md:mt-0 space-x-2 flex">
+                <button onclick="window.location.reload()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
+                    🔄 Ververs Pagina
                 </button>
-                <button id="trainBtn" onclick="trainAll()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition">
+                <button id="trainAllBtn" onclick="trainAll()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition">
                     🚀 Train Alle Panelen (365d)
                 </button>
             </div>
@@ -31,25 +32,25 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <h2 class="text-xl font-semibold mb-4 text-gray-700 flex items-center">
-                    <span class="mr-2">📈</span> Verwacht verloop per uur (7 dagen)
+                    <span class="mr-2">📈</span> Per Uur (kWh)
                 </h2>
-                <div class="h-80 w-full">
+                <div class="chart-container">
                     <canvas id="totalChart"></canvas>
                 </div>
             </div>
 
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <h2 class="text-xl font-semibold mb-4 text-gray-700 flex items-center">
-                    <span class="mr-2">📊</span> Totale opbrengst per dag
+                    <span class="mr-2">📊</span> Per Dag (kWh)
                 </h2>
-                <div class="h-80 w-full">
+                <div class="chart-container">
                     <canvas id="dailyBarChart"></canvas>
                 </div>
             </div>
         </div>
 
         <div class="mb-4">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">Individuele Paneel Status</h2>
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Individuele Panelen</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="panelGrid">
                 </div>
         </div>
@@ -66,7 +67,7 @@
                 renderPanelGrid(panels);
                 updateForecasts(panels);
             } catch (e) {
-                console.error("Fout bij laden panelen:", e);
+                console.error("Fout bij laden:", e);
             }
         }
 
@@ -74,66 +75,63 @@
             const grid = document.getElementById('panelGrid');
             grid.innerHTML = '';
             panels.forEach(p => {
+                const pId = p.id;
                 const card = document.createElement('div');
                 card.className = "bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col justify-between";
                 card.innerHTML = `
                     <div class="mb-3">
                         <div class="flex justify-between items-center">
-                            <span class="font-mono font-bold text-blue-600 text-lg">${p.id}</span>
-                            <span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500 font-bold uppercase tracking-widest">${p.panel_id || p.id}</span>
+                            <span class="font-mono font-bold text-blue-600 text-lg">${pId}</span>
+                            <span class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded font-bold uppercase tracking-wider">Actief</span>
                         </div>
-                        <p class="text-[10px] text-gray-400 truncate">${p.entity_id}</p>
+                        <p class="text-[10px] text-gray-400 truncate mt-1">${p.entity_id}</p>
                     </div>
                     <div class="flex space-x-2">
-                        <button onclick="trainOne('${p.id}')" class="flex-1 text-xs bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 transition">Train</button>
-                        <button onclick="predictOne('${p.id}')" class="flex-1 text-xs bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 transition">Check</button>
+                        <button onclick="trainOne(event, '${pId}')" class="flex-1 text-xs bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 font-semibold transition">Train</button>
+                        <button onclick="predictOne(event, '${pId}')" class="flex-1 text-xs bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 font-semibold transition">Check</button>
                     </div>
                 `;
                 grid.appendChild(card);
             });
         }
 
-        async function trainOne(id) {
-            const btn = event.currentTarget;
+        async function trainOne(event, id) {
+            const btn = event.currentTarget || event.target;
             const originalText = btn.innerText;
             btn.classList.add('loading');
-            btn.innerText = 'Bezig...';
+            btn.innerText = '⌛...';
             
             try {
                 const res = await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
                 const data = await res.json();
-                
                 if (data.ok || data.metrics) {
-                    alert(`Succes: Paneel ${id} is getraind!`);
+                    alert(`✅ Paneel ${id} succesvol getraind op 365 dagen!`);
                 } else {
-                    alert(`Fout bij ${id}: ${data.detail || 'Onbekende fout'}`);
+                    alert(`❌ Fout bij ${id}: ${data.detail || 'Onbekende fout'}`);
                 }
             } catch (e) {
-                alert(`Netwerkfout bij trainen van ${id}`);
+                alert(`⚠️ Netwerkfout bij trainen van ${id}`);
             } finally {
                 btn.classList.remove('loading');
                 btn.innerText = originalText;
-                init();
             }
         }
 
         async function trainAll() {
-            if(!confirm("Wil je alle 28 panelen trainen op 365 dagen data? Dit duurt enkele minuten.")) return;
-            const btn = document.getElementById('trainBtn');
+            if(!confirm("Start batch-training voor alle 28 panelen? Dit duurt circa 2-3 minuten.")) return;
+            const btn = document.getElementById('trainAllBtn');
             btn.classList.add('loading');
-            btn.innerText = '⏳ Batch training bezig...';
+            btn.innerText = 'Bezig met alle panelen...';
             
             const res = await fetch('/api/panels');
             const panels = await res.json();
             
             for(let p of panels) {
-                try {
-                    console.log(`Training ${p.id}...`);
-                    await fetch(`/api/panels/${p.id}/train?days=365`, { method: 'POST' });
-                } catch (e) { console.error(`Fout bij ${p.id}`); }
+                console.log(`Nu bezig met training: ${p.id}`);
+                await fetch(`/api/panels/${p.id}/train?days=365`, { method: 'POST' });
             }
             
-            alert("Alle trainingen zijn afgerond!");
+            alert("Klaar! Alle 28 modellen zijn bijgewerkt.");
             btn.classList.remove('loading');
             btn.innerText = '🚀 Train Alle Panelen (365d)';
             init();
@@ -156,22 +154,21 @@
                 }
             });
 
-            renderLineChart(hourlyData);
-            renderBarChart(dailyData);
+            renderCharts(hourlyData, dailyData);
         }
 
-        function renderLineChart(data) {
-            const labels = Object.keys(data);
-            const values = Object.values(data);
+        function renderCharts(hourly, daily) {
+            // Line Chart
+            const hLabels = Object.keys(hourly);
+            const hValues = Object.values(hourly);
             if (totalChart) totalChart.destroy();
-            const ctx = document.getElementById('totalChart').getContext('2d');
-            totalChart = new Chart(ctx, {
+            totalChart = new Chart(document.getElementById('totalChart'), {
                 type: 'line',
                 data: {
-                    labels: labels.map(l => new Date(l).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'})),
+                    labels: hLabels.map(l => new Date(l).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'})),
                     datasets: [{
-                        label: 'Totaal kWh per uur',
-                        data: values,
+                        label: 'kWh',
+                        data: hValues,
                         borderColor: '#3b82f6',
                         backgroundColor: 'rgba(59, 130, 246, 0.1)',
                         fill: true,
@@ -179,58 +176,41 @@
                         pointRadius: 0
                     }]
                 },
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: { y: { beginAtZero: true } }
-                }
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
             });
-        }
 
-        function renderBarChart(data) {
-            const labels = Object.keys(data);
-            const values = Object.values(data);
+            // Bar Chart
+            const dLabels = Object.keys(daily);
+            const dValues = Object.values(daily);
             if (dailyBarChart) dailyBarChart.destroy();
-            const ctx = document.getElementById('dailyBarChart').getContext('2d');
-            dailyBarChart = new Chart(ctx, {
+            dailyBarChart = new Chart(document.getElementById('dailyBarChart'), {
                 type: 'bar',
                 data: {
-                    labels: labels.map(d => new Date(d).toLocaleDateString('nl-NL', {weekday: 'short', day: 'numeric'})),
+                    labels: dLabels.map(d => new Date(d).toLocaleDateString('nl-NL', {weekday: 'short', day: 'numeric'})),
                     datasets: [{
-                        label: 'Totaal kWh per dag',
-                        data: values,
+                        label: 'kWh / Dag',
+                        data: dValues,
                         backgroundColor: '#f59e0b',
-                        borderRadius: 6
+                        borderRadius: 5
                     }]
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: { y: { beginAtZero: true } }
-                }
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
             });
         }
 
-        async function predictOne(id) {
+        async function predictOne(event, id) {
             const res = await fetch(`/api/panels/${id}/predict?days=7`);
             const data = await res.json();
             if(data.ok) {
-                const hourlyMap = data.forecast.reduce((acc, curr) => {
-                    acc[curr.time] = curr.kwh;
-                    return acc;
-                }, {});
-                renderLineChart(hourlyMap);
-                
-                const dailyMap = data.forecast.reduce((acc, curr) => {
-                    const day = curr.time.split('T')[0];
-                    acc[day] = (acc[day] || 0) + curr.kwh;
-                    return acc;
-                }, {});
-                renderBarChart(dailyMap);
-                
-                alert(`Grafieken tonen nu alleen data voor paneel ${id}. Klik op 'Ververs Data' voor het totaal.`);
+                const hData = {};
+                const dData = {};
+                data.forecast.forEach(f => {
+                    hData[f.time] = f.kwh;
+                    const d = f.time.split('T')[0];
+                    dData[d] = (dData[d] || 0) + f.kwh;
+                });
+                renderCharts(hData, dData);
+                alert(`Grafiek toont nu enkel Paneel ${id}. Klik op 'Ververs Pagina' voor het totaal.`);
             }
         }
 
