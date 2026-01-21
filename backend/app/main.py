@@ -35,9 +35,13 @@ def _fetch_panel_kwh_stats(panel, days: int):
         print(f"⚠️ Hass gaf te weinig punten terug: {len(points) if points else 0}")
         return pd.DataFrame()
 
+    # Vervang in main.py dit stukje:
     df = pd.DataFrame(points)
-    # Gebruik 'sum' (totaal teller) of 'state' (huidige waarde)
-    col = "sum" if "sum" in df.columns else "state"
+    col = next((c for c in ["sum", "state", "mean"] if c in df.columns), None) # Zoek naar beschikbare kolom
+    
+    if col is None:
+        print(f"❌ Geen bruikbare kolom (sum/state/mean) gevonden in: {df.columns}")
+        return pd.DataFrame()
     
     # Omzetten naar tijd en afronden op uren
     df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("H")

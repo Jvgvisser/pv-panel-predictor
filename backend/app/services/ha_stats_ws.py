@@ -88,13 +88,15 @@ class HAStatsWSClient:
           { "start": "...", "sum": <kWh total increasing> }   (or "state"/"mean" depending)
         For energy sensors it is typically 'sum' for total_increasing.
         """
+# --- Dit gedeelte binnen de fetch_hourly_energy_kwh_from_stats functie aanpassen ---
         if now is None:
             now = datetime.now(timezone.utc)
 
-        start = now - timedelta(days=days)
-        end = now
+        # FIX: Maak de tijden 'hard' op het hele uur om overlap met weerdata te garanderen
+        end = now.replace(minute=0, second=0, microsecond=0)
+        start = (end - timedelta(days=days))
 
-        # Types: ask for sum primarily; HA will return what exists.
+        # Types: vraag expliciet om 'sum', 'state' en 'mean'
         result = asyncio.run(
             self.statistics_during_period(
                 start=start,
@@ -104,7 +106,10 @@ class HAStatsWSClient:
                 types=["sum", "state", "mean"],
             )
         )
-        # result is typically a dict keyed by statistic_id -> list of points
+        
         if isinstance(result, dict):
-            return result.get(entity_id, []) or []
+            points = result.get(entity_id, []) or []
+            # DEBUG: Print hoeveel punten we binnenkrijgen in de LXC logs
+            print(f"📊 HA WebSocket: {len(points)} punten opgehaald voor {entity_id}")
+            return points
         return []
