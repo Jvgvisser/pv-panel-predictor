@@ -19,25 +19,39 @@ ms = PanelModelService()
 def _fetch_panel_kwh_stats(panel, days: int):
     """Fetch hourly kWh using HA long-term statistics via websocket."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
+    
+    # Gebruik een harde UTC timestamp voor 'now'
+    now_dt = datetime.now(timezone.utc)
+    
+    print(f"DEBUG: Vraag data op bij Hass voor {panel.entity_id} (Dagen: {days})")
+    
     points = ws.fetch_hourly_energy_kwh_from_stats(
         panel.entity_id, 
         days=days, 
-        now=datetime.now(timezone.utc)
+        now=now_dt
     )
-    if not points:
+    
+    if not points or len(points) < 2:
+        print(f"⚠️ Hass gaf te weinig punten terug: {len(points) if points else 0}")
         return pd.DataFrame()
 
     df = pd.DataFrame(points)
+    # Gebruik 'sum' (totaal teller) of 'state' (huidige waarde)
     col = "sum" if "sum" in df.columns else "state"
     
-    # Forceer naar UTC en rond af op het hele uur voor een perfecte match met weer-data
+    # Omzetten naar tijd en afronden op uren
     df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("H")
     df = df.set_index("time").sort_index()
     
+    # Verwijder dubbele tijdstippen
+    df = df[~df.index.duplicated(keep='first')]
+    
     series = df[col].astype(float)
-    # Bereken het verschil tussen uren (kWh productie per uur)
+    # Bereken het verschil tussen de cumulatieve standen (productie per uur)
     hourly_kwh = series.diff().clip(lower=0)
-    return hourly_kwh.to_frame(name="kwh")
+    
+    # Verwijder de eerste NaN rij van de .diff()
+    return hourly_kwh.to_frame(name="kwh").dropna()
 
 @app.post("/api/panels/{panel_id}/train")
 def train_panel(panel_id: str, days: int = 30):
