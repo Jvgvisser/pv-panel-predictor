@@ -16,7 +16,7 @@ repo = PanelsRepo()
 meteo = OpenMeteoClient()
 ms = PanelModelService()
 
-def _fetch_panel_kwh_stats(panel, days: int):
+async def _fetch_panel_kwh_stats(panel, days: int):
     """Fetch hourly kWh using HA long-term statistics via websocket."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
     
@@ -25,7 +25,8 @@ def _fetch_panel_kwh_stats(panel, days: int):
     
     print(f"DEBUG: Vraag data op bij Hass voor {panel.entity_id} (Dagen: {days})")
     
-    points = ws.fetch_hourly_energy_kwh_from_stats(
+    # VOEGE HIER 'await' TOE OMDAT DE WS CLIENT NU ASYNC IS
+    points = await ws.fetch_hourly_energy_kwh_from_stats(
         panel.entity_id, 
         days=days, 
         now=now_dt
@@ -35,52 +36,47 @@ def _fetch_panel_kwh_stats(panel, days: int):
         print(f"⚠️ Hass gaf te weinig punten terug: {len(points) if points else 0}")
         return pd.DataFrame()
 
-    # Vervang in main.py dit stukje:
     df = pd.DataFrame(points)
-    col = next((c for c in ["sum", "state", "mean"] if c in df.columns), None) # Zoek naar beschikbare kolom
+    # Zoek naar beschikbare kolom (LTS gebruikt meestal 'sum')
+    col = next((c for c in ["sum", "state", "mean"] if c in df.columns), None)
     
     if col is None:
-        print(f"❌ Geen bruikbare kolom (sum/state/mean) gevonden in: {df.columns}")
+        print(f"❌ Geen bruikbare kolom gevonden in: {df.columns}")
         return pd.DataFrame()
     
-    # Omzetten naar tijd en afronden op uren
-    df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("H")
+    df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("h")
     df = df.set_index("time").sort_index()
-    
-    # Verwijder dubbele tijdstippen
     df = df[~df.index.duplicated(keep='first')]
     
     series = df[col].astype(float)
-    # Bereken het verschil tussen de cumulatieve standen (productie per uur)
-    hourly_kwh = series.diff().clip(lower=0)
+    # Bereken verschil (Wh naar Wh per uur)
+    hourly_diff = series.diff().clip(lower=0)
     
-    # Verwijder de eerste NaN rij van de .diff()
-    return hourly_kwh.to_frame(name="kwh").dropna()
+    # Pas schaling toe naar kWh (sensor is Wh)
+    return (hourly_diff * 0.001).to_frame(name="kwh").dropna()
 
 @app.post("/api/panels/{panel_id}/train")
-def train_panel(panel_id: str, days: int = 30):
+async def train_panel(panel_id: str, days: int = 30):
     try:
         print(f"🚀 Start training voor {panel_id} over {days} dagen...")
         panel = repo.get(panel_id)
 
-        # 1. HAAL DATA OP
-        energy_df = _fetch_panel_kwh_stats(panel, days=days)
+        # 1. HAAL DATA OP (NU MET AWAIT)
+        energy_df = await _fetch_panel_kwh_stats(panel, days=days)
         meteo_df = meteo.fetch_history_days(
             latitude=panel.latitude, longitude=panel.longitude,
             days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
         )
 
-        # 2. DATA COMBINEREN (STAP 3 FIX)
+        # 2. DATA COMBINEREN
         print(f"🔗 Data combineren voor {len(energy_df)} Hass rijen en {len(meteo_df)} weer rijen...")
         
-        # Zorg dat beide indexen exact gelijk zijn (UTC + Hour precision)
-        energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("H")
-        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("H")
+        energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
+        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
         
         energy_df = energy_df[~energy_df.index.duplicated(keep='first')]
         meteo_df = meteo_df[~meteo_df.index.duplicated(keep='first')]
 
-        # De inner join zorgt dat alleen uren die in BEIDE sets voorkomen overblijven
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
         print(f"📈 Match gevonden voor {len(train_df)} uren.")
@@ -104,29 +100,21 @@ def train_panel(panel_id: str, days: int = 30):
 
 @app.get("/api/panels/{panel_id}/predict")
 def predict_panel(panel_id: str, days: int = 7):
+    # (Deze blijft ongewijzigd, OpenMeteo is sync)
     try:
         panel = repo.get(panel_id)
         trained = ms.load(panel_id)
-
         meteo_fc = meteo.fetch_hourly_forecast(
             latitude=panel.latitude, longitude=panel.longitude,
             days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
         )
-
         df = meteo_fc.copy()
         df["time"] = pd.to_datetime(df.index, utc=True)
-        
-        # Voeg dummy features toe zodat model niet klaagt over missende kolommen
         df["kwh_lag_24"] = 0.0 
         df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
-
         df = add_time_features(df, "time")
         pred = ms.predict(trained, df)
-
-        out = []
-        for t, y in zip(df["time"], pred):
-            out.append({"time": t.isoformat(), "kwh": float(y)})
-
+        out = [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
         return {"ok": True, "panel_id": panel_id, "forecast": out}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
