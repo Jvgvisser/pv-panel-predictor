@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PV Predictor Dashboard - Delft</title>
+    <title>PV Dashboard - Delft</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -14,17 +14,17 @@
 <body class="bg-gray-100 min-h-screen p-4 font-sans">
 
     <div class="max-w-7xl mx-auto">
-        <header class="mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-b-4 border-blue-500">
+        <header class="mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-b-4 border-blue-600">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Zonnepanelen Voorspeller</h1>
-                <p class="text-gray-500 font-medium text-lg">Locatie: Bartoutszate 42, Delft</p>
+                <p class="text-gray-600 font-medium text-lg">📍 Bartoutszate 42, Delft</p>
             </div>
             <div class="mt-4 md:mt-0 space-x-2 flex">
-                <button onclick="window.location.reload()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
-                    🔄 Ververs Pagina
+                <button onclick="init()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
+                    🔄 Ververs Data
                 </button>
                 <button id="trainAllBtn" onclick="trainAll()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition">
-                    🚀 Train Alle 28 Panelen
+                    🚀 Train Alle Panelen
                 </button>
             </div>
         </header>
@@ -32,23 +32,16 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <h2 class="text-xl font-semibold mb-4 text-gray-700">Verwacht verloop per uur (7 dagen)</h2>
-                <div class="chart-container">
-                    <canvas id="totalChart"></canvas>
-                </div>
+                <div class="chart-container"><canvas id="totalChart"></canvas></div>
             </div>
-
             <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h2 class="text-xl font-semibold mb-4 text-gray-700">Totale opbrengst per dag (kWh)</h2>
-                <div class="chart-container">
-                    <canvas id="dailyBarChart"></canvas>
-                </div>
+                <h2 class="text-xl font-semibold mb-4 text-gray-700">Totaal per dag (kWh)</h2>
+                <div class="chart-container"><canvas id="dailyBarChart"></canvas></div>
             </div>
         </div>
 
-        <div class="mb-4">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">Individuele Panelen</h2>
-            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="panelGrid"></div>
-        </div>
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Mijn Panelen</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="panelGrid"></div>
     </div>
 
     <script>
@@ -58,6 +51,7 @@
             try {
                 const res = await fetch('/api/panels');
                 const panels = await res.json();
+                console.log("Gevonden panelen:", panels);
                 renderPanelGrid(panels);
                 updateForecasts(panels);
             } catch (e) { console.error("Fout bij laden:", e); }
@@ -66,51 +60,54 @@
         function renderPanelGrid(panels) {
             const grid = document.getElementById('panelGrid');
             grid.innerHTML = '';
+            
             panels.forEach(p => {
+                // We kijken welke sleutel de API gebruikt voor het ID
+                const id = p.panel_id || p.id; 
+                
                 const card = document.createElement('div');
                 card.className = "bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col justify-between";
-                
-                // We gebruiken data-attributes om de ID veilig op te slaan in de button
                 card.innerHTML = `
                     <div class="mb-3">
                         <div class="flex justify-between items-center">
-                            <span class="font-mono font-bold text-blue-600 text-lg">${p.id}</span>
-                            <span class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded font-bold uppercase tracking-wider">OK</span>
+                            <span class="font-mono font-bold text-blue-600 text-sm truncate mr-2">${id}</span>
+                            <span class="text-[9px] bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold uppercase shrink-0">Inverter</span>
                         </div>
-                        <p class="text-[10px] text-gray-400 truncate mt-1">${p.entity_id}</p>
+                        <p class="text-[10px] text-gray-400 truncate mt-1 italic">Sensor OK</p>
                     </div>
                     <div class="flex space-x-2">
-                        <button data-id="${p.id}" onclick="handleTrain(this)" class="flex-1 text-xs bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 font-semibold transition">Train</button>
-                        <button data-id="${p.id}" onclick="handlePredict(this)" class="flex-1 text-xs bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 font-semibold transition">Check</button>
+                        <button onclick="runTrain('${id}', this)" class="flex-1 text-[10px] bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 font-bold transition">TRAIN</button>
+                        <button onclick="runPredict('${id}', this)" class="flex-1 text-[10px] bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 font-bold transition">CHECK</button>
                     </div>
                 `;
                 grid.appendChild(card);
             });
         }
 
-        async function handleTrain(btn) {
-            const id = btn.getAttribute('data-id'); // Haal het ID direct uit de knop zelf
+        async function runTrain(id, btn) {
             const originalText = btn.innerText;
+            btn.innerText = '...';
             btn.classList.add('loading');
-            btn.innerText = '⌛...';
             
             try {
+                // We sturen het ID exact zoals het uit de lijst kwam
                 const res = await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
                 const data = await res.json();
-                if (data.ok || data.metrics) {
-                    alert(`✅ Paneel ${id} succesvol getraind!`);
+                
+                if (res.ok || data.ok) {
+                    alert(`✅ Gelukt! Paneel ${id} is getraind.`);
                 } else {
-                    alert(`❌ Fout bij ${id}: ${data.detail || 'Panel not found'}`);
+                    alert(`❌ Fout bij ${id}: ${data.detail || 'Niet gevonden op server'}`);
                 }
-            } catch (e) { alert(`⚠️ Netwerkfout bij trainen van ${id}`); }
-            finally {
-                btn.classList.remove('loading');
+            } catch (e) { 
+                alert("⚠️ Kan geen verbinding maken met de server."); 
+            } finally {
                 btn.innerText = originalText;
+                btn.classList.remove('loading');
             }
         }
 
-        async function handlePredict(btn) {
-            const id = btn.getAttribute('data-id');
+        async function runPredict(id, btn) {
             try {
                 const res = await fetch(`/api/panels/${id}/predict?days=7`);
                 const data = await res.json();
@@ -123,24 +120,27 @@
                     });
                     renderCharts(hData, dData);
                 }
-            } catch(e) { console.error(e); }
+            } catch(e) { console.error(id, e); }
         }
 
         async function trainAll() {
-            if(!confirm("Alle 28 panelen trainen op 365 dagen data? Dit duurt even.")) return;
+            if(!confirm("Alle panelen in de lijst trainen?")) return;
             const btn = document.getElementById('trainAllBtn');
-            btn.innerText = '⏳ Bezig met batch...';
+            const originalText = btn.innerText;
+            btn.innerText = '⏳ Bezig...';
             btn.classList.add('loading');
+
+            try {
+                const res = await fetch('/api/panels');
+                const panels = await res.json();
+                for(let p of panels) {
+                    const id = p.panel_id || p.id;
+                    await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
+                }
+                alert("Klaar! Alle modellen zijn bijgewerkt.");
+            } catch (e) { alert("Fout tijdens batch training."); }
             
-            const res = await fetch('/api/panels');
-            const panels = await res.json();
-            
-            for(let p of panels) {
-                await fetch(`/api/panels/${p.id}/train?days=365`, { method: 'POST' });
-            }
-            
-            alert("Klaar! Systeem is volledig geüpdatet.");
-            btn.innerText = '🚀 Train Alle 28 Panelen';
+            btn.innerText = originalText;
             btn.classList.remove('loading');
             init();
         }
@@ -152,9 +152,9 @@
                 type: 'line',
                 data: {
                     labels: hLabels.map(l => new Date(l).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'})),
-                    datasets: [{ label: 'kWh', data: hValues, borderColor: '#3b82f6', fill: true, tension: 0.3, pointRadius: 0 }]
+                    datasets: [{ label: 'kWh', data: hValues, borderColor: '#2563eb', fill: true, tension: 0.3, pointRadius: 0 }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+                options: { responsive: true, maintainAspectRatio: false }
             });
 
             const dLabels = Object.keys(daily), dValues = Object.values(daily);
@@ -163,9 +163,9 @@
                 type: 'bar',
                 data: {
                     labels: dLabels.map(d => new Date(d).toLocaleDateString('nl-NL', {weekday: 'short', day: 'numeric'})),
-                    datasets: [{ label: 'kWh / Dag', data: dValues, backgroundColor: '#f59e0b', borderRadius: 5 }]
+                    datasets: [{ label: 'kWh/Dag', data: dValues, backgroundColor: '#f59e0b', borderRadius: 4 }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+                options: { responsive: true, maintainAspectRatio: false }
             });
         }
 
