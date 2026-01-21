@@ -124,7 +124,8 @@ def delete_panel(panel_id: str):
     repo.delete(panel_id)
     return {"ok": True}
 
-# Mount static files voor de frontend (indien aanwezig)
-static_path = Path("frontend/dist")
-if static_path.exists():
+# Gebruik het exacte pad waar het bestand nu staat
+static_path = Path("/opt/pv-panel-predictor/frontend")
+
+if (static_path / "index.html").exists():
     app.mount("/", StaticFiles(directory=str(static_path), html=True), name="static")
