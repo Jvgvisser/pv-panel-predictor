@@ -125,3 +125,27 @@ class OpenMeteoClient:
             timezone=timezone,
             historical=False,
         )
+
+    def fetch_hourly_archive(
+        self,
+        latitude: float,
+        longitude: float,
+        start_date,
+        end_date,
+        tilt_deg: float,
+        azimuth_deg: float,
+        timezone: str = "Europe/Amsterdam",
+        models: str | None = None,
+    ):
+        """Wrapper for long-term training using the historical-forecast host."""
+        return self.fetch_hourly_range(
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+            tilt_deg=tilt_deg,
+            azimuth_deg=azimuth_deg,
+            timezone=timezone,
+            models=models,
+            historical=True,
+        )
