@@ -1,0 +1,13 @@
+        # Get forecast from OpenMeteo
+        df = meteo_client.fetch_hourly_forecast(
+            latitude=panel.latitude,
+            longitude=panel.longitude,
+            days=days,
+            tilt_deg=panel.tilt_deg,
+            azimuth_deg=panel.azimuth_deg,
+        )
+
+        if "time" in df.columns:
+            times = pd.to_datetime(df["time"])
+        else:
+            times = pd.to_datetime(df.index)

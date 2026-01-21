@@ -3,170 +3,172 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PV Dashboard - Delft</title>
+    <title>PV Dashboard Delft - Bartoutszate</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .loading { cursor: wait; opacity: 0.5; pointer-events: none; }
-        .chart-container { position: relative; height: 320px; width: 100%; }
+        .panel-card:hover { transform: translateY(-2px); transition: 0.2s; }
+        .active-panel { border-color: #2563eb; background-color: #eff6ff; }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen p-4 font-sans">
+<body class="bg-gray-50 min-h-screen p-4">
 
     <div class="max-w-7xl mx-auto">
-        <header class="mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-b-4 border-blue-600">
+        <header class="mb-6 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-l-8 border-blue-600">
             <div>
-                <h1 class="text-3xl font-bold text-gray-800">Zonnepanelen Voorspeller</h1>
-                <p class="text-gray-600 font-medium text-lg">📍 Bartoutszate 42, Delft</p>
+                <h1 id="mainTitle" class="text-2xl font-bold text-gray-800">Totaaloverzicht Bartoutszate 42</h1>
+                <p id="subTitle" class="text-blue-600 font-medium">Gecombineerde data van 28 panelen</p>
             </div>
-            <div class="mt-4 md:mt-0 space-x-2 flex">
-                <button onclick="init()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
-                    🔄 Ververs Data
+            <div class="mt-4 md:mt-0 flex gap-2">
+                <button onclick="loadTotalView()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow transition">
+                    🏠 Toon Totaal
                 </button>
-                <button id="trainAllBtn" onclick="trainAll()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition">
-                    🚀 Train Alle Panelen
+                <button onclick="trainAll()" class="bg-gray-800 hover:bg-black text-white py-2 px-4 rounded-lg shadow transition">
+                    🚀 Train Alles
                 </button>
             </div>
         </header>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h2 class="text-xl font-semibold mb-4 text-gray-700">Verwacht verloop per uur (7 dagen)</h2>
-                <div class="chart-container"><canvas id="totalChart"></canvas></div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                <h3 class="text-lg font-bold mb-4 text-gray-700">Verwacht Vermogen (kWh per uur)</h3>
+                <div style="height: 300px;"><canvas id="hourlyChart"></canvas></div>
             </div>
-            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                <h2 class="text-xl font-semibold mb-4 text-gray-700">Totaal per dag (kWh)</h2>
-                <div class="chart-container"><canvas id="dailyBarChart"></canvas></div>
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                <h3 class="text-lg font-bold mb-4 text-gray-700">Dagopbrengst (kWh)</h3>
+                <div style="height: 300px;"><canvas id="dailyChart"></canvas></div>
             </div>
         </div>
 
-        <h2 class="text-xl font-bold text-gray-800 mb-4">Mijn Panelen</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="panelGrid"></div>
+        <h3 class="text-xl font-bold text-gray-800 mb-4">Individuele Panelen <span class="text-sm font-normal text-gray-500">(Klik voor details)</span></h3>
+        <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 lg:grid-cols-10 gap-3" id="panelGrid">
+            </div>
     </div>
 
     <script>
-        let totalChart, dailyBarChart;
+        let hourlyChart, dailyChart;
+        let allPanels = [];
+        let allForecasts = {}; // Buffer om data op te slaan zodat switchen snel gaat
 
         async function init() {
-            try {
-                const res = await fetch('/api/panels');
-                const panels = await res.json();
-                console.log("Gevonden panelen:", panels);
-                renderPanelGrid(panels);
-                updateForecasts(panels);
-            } catch (e) { console.error("Fout bij laden:", e); }
+            const res = await fetch('/api/panels');
+            const data = await res.json();
+            allPanels = data.panels || data;
+            
+            renderPanelGrid();
+            await loadTotalView();
         }
 
-        function renderPanelGrid(panels) {
+        function renderPanelGrid() {
             const grid = document.getElementById('panelGrid');
             grid.innerHTML = '';
-            
-            panels.forEach(p => {
-                // We kijken welke sleutel de API gebruikt voor het ID
-                const id = p.panel_id || p.id; 
-                
+            allPanels.forEach(p => {
                 const card = document.createElement('div');
-                card.className = "bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col justify-between";
+                card.id = `card-${p.panel_id}`;
+                card.className = "panel-card bg-white p-3 rounded-lg border border-gray-200 text-center cursor-pointer shadow-sm";
+                card.onclick = () => loadSinglePanelView(p.panel_id);
                 card.innerHTML = `
-                    <div class="mb-3">
-                        <div class="flex justify-between items-center">
-                            <span class="font-mono font-bold text-blue-600 text-sm truncate mr-2">${id}</span>
-                            <span class="text-[9px] bg-blue-50 text-blue-600 px-2 py-1 rounded font-bold uppercase shrink-0">Inverter</span>
-                        </div>
-                        <p class="text-[10px] text-gray-400 truncate mt-1 italic">Sensor OK</p>
-                    </div>
-                    <div class="flex space-x-2">
-                        <button onclick="runTrain('${id}', this)" class="flex-1 text-[10px] bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 font-bold transition">TRAIN</button>
-                        <button onclick="runPredict('${id}', this)" class="flex-1 text-[10px] bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 font-bold transition">CHECK</button>
-                    </div>
+                    <div class="text-sm font-bold text-gray-700">${p.panel_id}</div>
+                    <div class="text-[10px] text-gray-400 uppercase mt-1">Bekijk paneel</div>
                 `;
                 grid.appendChild(card);
             });
         }
 
-        async function runTrain(id, btn) {
-            const originalText = btn.innerText;
-            btn.innerText = '...';
-            btn.classList.add('loading');
+        async function loadTotalView() {
+            document.getElementById('mainTitle').innerText = "Totaaloverzicht Bartoutszate 42";
+            document.getElementById('subTitle').innerText = "Gecombineerde data van 28 panelen";
             
-            try {
-                // We sturen het ID exact zoals het uit de lijst kwam
-                const res = await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
-                const data = await res.json();
-                
-                if (res.ok || data.ok) {
-                    alert(`✅ Gelukt! Paneel ${id} is getraind.`);
-                } else {
-                    alert(`❌ Fout bij ${id}: ${data.detail || 'Niet gevonden op server'}`);
-                }
-            } catch (e) { 
-                alert("⚠️ Kan geen verbinding maken met de server."); 
-            } finally {
-                btn.innerText = originalText;
-                btn.classList.remove('loading');
-            }
+            // Reset actieve klassen in grid
+            document.querySelectorAll('.panel-card').forEach(c => c.classList.remove('active-panel'));
+
+            const combinedHourly = {};
+            const combinedDaily = {};
+
+            const promises = allPanels.map(async (p) => {
+                const forecast = await getForecast(p.panel_id);
+                forecast.forEach(f => {
+                    combinedHourly[f.time] = (combinedHourly[f.time] || 0) + f.kwh;
+                    const day = f.time.split('T')[0];
+                    combinedDaily[day] = (combinedDaily[day] || 0) + f.kwh;
+                });
+            });
+
+            await Promise.all(promises);
+            updateCharts(combinedHourly, combinedDaily, '#2563eb', 'Totaal Systeem');
         }
 
-        async function runPredict(id, btn) {
-            try {
-                const res = await fetch(`/api/panels/${id}/predict?days=7`);
-                const data = await res.json();
-                if(data.ok) {
-                    const hData = {}, dData = {};
-                    data.forecast.forEach(f => {
-                        hData[f.time] = f.kwh;
-                        const d = f.time.split('T')[0];
-                        dData[d] = (dData[d] || 0) + f.kwh;
-                    });
-                    renderCharts(hData, dData);
-                }
-            } catch(e) { console.error(id, e); }
-        }
-
-        async function trainAll() {
-            if(!confirm("Alle panelen in de lijst trainen?")) return;
-            const btn = document.getElementById('trainAllBtn');
-            const originalText = btn.innerText;
-            btn.innerText = '⏳ Bezig...';
-            btn.classList.add('loading');
-
-            try {
-                const res = await fetch('/api/panels');
-                const panels = await res.json();
-                for(let p of panels) {
-                    const id = p.panel_id || p.id;
-                    await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
-                }
-                alert("Klaar! Alle modellen zijn bijgewerkt.");
-            } catch (e) { alert("Fout tijdens batch training."); }
+        async function loadSinglePanelView(panelId) {
+            document.getElementById('mainTitle').innerText = `Paneel ${panelId}`;
+            document.getElementById('subTitle').innerText = `Individuele voorspelling voor ${panelId}`;
             
-            btn.innerText = originalText;
-            btn.classList.remove('loading');
-            init();
+            // Markeer actieve kaart
+            document.querySelectorAll('.panel-card').forEach(c => c.classList.remove('active-panel'));
+            document.getElementById(`card-${panelId}`).classList.add('active-panel');
+
+            const hourly = {};
+            const daily = {};
+            const forecast = await getForecast(panelId);
+            
+            forecast.forEach(f => {
+                hourly[f.time] = f.kwh;
+                const day = f.time.split('T')[0];
+                daily[day] = (daily[day] || 0) + f.kwh;
+            });
+
+            updateCharts(hourly, daily, '#059669', `Paneel ${panelId}`);
         }
 
-        function renderCharts(hourly, daily) {
-            const hLabels = Object.keys(hourly), hValues = Object.values(hourly);
-            if (totalChart) totalChart.destroy();
-            totalChart = new Chart(document.getElementById('totalChart'), {
+        async function getForecast(panelId) {
+            if (allForecasts[panelId]) return allForecasts[panelId];
+            try {
+                const res = await fetch(`/api/panels/${panelId}/predict?days=7`);
+                const data = await res.json();
+                if (data.ok) {
+                    allForecasts[panelId] = data.forecast;
+                    return data.forecast;
+                }
+            } catch (e) { console.error(e); }
+            return [];
+        }
+
+        function updateCharts(hourly, daily, color, label) {
+            const hLabels = Object.keys(hourly).sort();
+            const hValues = hLabels.map(l => hourly[l]);
+            
+            if (hourlyChart) hourlyChart.destroy();
+            hourlyChart = new Chart(document.getElementById('hourlyChart'), {
                 type: 'line',
                 data: {
                     labels: hLabels.map(l => new Date(l).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'})),
-                    datasets: [{ label: 'kWh', data: hValues, borderColor: '#2563eb', fill: true, tension: 0.3, pointRadius: 0 }]
+                    datasets: [{ label: label + ' (kWh)', data: hValues, borderColor: color, backgroundColor: color+'22', fill: true, tension: 0.3, pointRadius: 2 }]
                 },
                 options: { responsive: true, maintainAspectRatio: false }
             });
 
-            const dLabels = Object.keys(daily), dValues = Object.values(daily);
-            if (dailyBarChart) dailyBarChart.destroy();
-            dailyBarChart = new Chart(document.getElementById('dailyBarChart'), {
+            const dLabels = Object.keys(daily).sort();
+            const dValues = dLabels.map(d => daily[d]);
+
+            if (dailyChart) dailyChart.destroy();
+            dailyChart = new Chart(document.getElementById('dailyChart'), {
                 type: 'bar',
                 data: {
                     labels: dLabels.map(d => new Date(d).toLocaleDateString('nl-NL', {weekday: 'short', day: 'numeric'})),
-                    datasets: [{ label: 'kWh/Dag', data: dValues, backgroundColor: '#f59e0b', borderRadius: 4 }]
+                    datasets: [{ label: 'Dag Totaal (kWh)', data: dValues, backgroundColor: color }]
                 },
                 options: { responsive: true, maintainAspectRatio: false }
             });
+        }
+
+        async function trainAll() {
+            const btn = event.target;
+            btn.innerText = "⏳ Bezig...";
+            for(let p of allPanels) {
+                await fetch(`/api/panels/${p.panel_id}/train?days=365`, { method: 'POST' });
+            }
+            btn.innerText = "🚀 Alles Getraind";
+            allForecasts = {}; // Clear cache
+            loadTotalView();
         }
 
         init();
