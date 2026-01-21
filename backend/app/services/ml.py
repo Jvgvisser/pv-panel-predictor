@@ -9,22 +9,26 @@ from sklearn.metrics import mean_absolute_error
 
 def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
+
+    # Pak de tijd van de kolom OF van de index
     if time_col in out.columns:
-        t = pd.to_datetime(out[time_col], utc=True, errors="coerce")
+        t = pd.to_datetime(out[time_col], utc=True)
+        out["hour"] = t.dt.hour
+        out["doy"] = t.dt.dayofyear
     elif isinstance(out.index, pd.DatetimeIndex):
         t = out.index
-        t = t.tz_localize("UTC") if t.tz is None else t.tz_convert("UTC")
+        out["hour"] = t.hour
+        out["doy"] = t.dayofyear
     else:
-        raise ValueError("add_time_features: nood aan 'time' kolom of DatetimeIndex")
+        raise ValueError("add_time_features: geen 'time' kolom of DatetimeIndex gevonden")
 
-    out["hour"] = t.dt.hour
-    out["doy"] = t.dt.dayofyear
+    # De berekeningen blijven hetzelfde
     out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24.0)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24.0)
     out["doy_sin"] = np.sin(2 * np.pi * out["doy"] / 365.25)
     out["doy_cos"] = np.cos(2 * np.pi * out["doy"] / 365.25)
+    
     return out
-
 @dataclass
 class TrainedModel:
     model: LGBMRegressor
