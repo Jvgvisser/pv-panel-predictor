@@ -1,15 +1,13 @@
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
-
+from datetime import datetime, timezone
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
-from backend.app.services.ha_client import HAClient
-from backend.app.services.open_meteo_client import OpenMeteoClient
 from backend.app.services.ha_stats_ws import HAStatsWSClient
+from backend.app.services.open_meteo_client import OpenMeteoClient
 from backend.app.services.ml import PanelModelService, add_time_features
 
 app = FastAPI(title="PV Panel Predictor")
@@ -19,18 +17,21 @@ meteo = OpenMeteoClient()
 ms = PanelModelService()
 
 def _fetch_panel_kwh_stats(panel, days: int):
-    """
-    Fetch hourly kWh using HA long-term statistics via websocket.
-    """
+    """Fetch hourly kWh using HA long-term statistics via websocket."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
-    points = ws.fetch_hourly_energy_kwh_from_stats(panel.entity_id, days=days, now=datetime.now(timezone.utc))
+    points = ws.fetch_hourly_energy_kwh_from_stats(
+        panel.entity_id, 
+        days=days, 
+        now=datetime.now(timezone.utc)
+    )
     if not points:
-        return pd.DataFrame({"kwh": []}, index=pd.DatetimeIndex([], tz="Europe/Amsterdam"))
+        return pd.DataFrame()
 
     df = pd.DataFrame(points)
-    # Kies 'sum' indien beschikbaar, anders 'state'
     col = "sum" if "sum" in df.columns else "state"
-    df["time"] = pd.to_datetime(df["start"], utc=True).dt.tz_convert("Europe/Amsterdam")
+    
+    # Forceer naar UTC en rond af op het hele uur voor een perfecte match met weer-data
+    df["time"] = pd.to_datetime(df["start"], utc=True).dt.floor("H")
     df = df.set_index("time").sort_index()
     
     series = df[col].astype(float)
@@ -44,41 +45,35 @@ def train_panel(panel_id: str, days: int = 30):
         print(f"🚀 Start training voor {panel_id} over {days} dagen...")
         panel = repo.get(panel_id)
 
-        # --- STAP 1: HASS DATA ---
+        # 1. HAAL DATA OP
         energy_df = _fetch_panel_kwh_stats(panel, days=days)
-        
-        # --- STAP 2: WEER DATA ---
         meteo_df = meteo.fetch_history_days(
             latitude=panel.latitude, longitude=panel.longitude,
             days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
         )
 
-        # --- STAP 3: HIER KOMT HET NIEUWE BLOK (Copy/Paste dit) ---
-        print(f"🔗 Data combineren...")
+        # 2. DATA COMBINEREN (STAP 3 FIX)
+        print(f"🔗 Data combineren voor {len(energy_df)} Hass rijen en {len(meteo_df)} weer rijen...")
         
-        energy_df.index = pd.to_datetime(energy_df.index, utc=True)
-        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True)
+        # Zorg dat beide indexen exact gelijk zijn (UTC + Hour precision)
+        energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("H")
+        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("H")
         
         energy_df = energy_df[~energy_df.index.duplicated(keep='first')]
         meteo_df = meteo_df[~meteo_df.index.duplicated(keep='first')]
 
-        if "kwh" not in energy_df.columns and "value" in energy_df.columns:
-            energy_df = energy_df.rename(columns={"value": "kwh"})
-
+        # De inner join zorgt dat alleen uren die in BEIDE sets voorkomen overblijven
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
         print(f"📈 Match gevonden voor {len(train_df)} uren.")
 
-        if len(train_df) < 10:
-            print(f"❌ Te weinig data! Hass bereik: {energy_df.index.min()} tot {energy_df.index.max()}")
-            print(f"❌ Weer bereik: {meteo_df.index.min()} tot {meteo_df.index.max()}")
-            raise HTTPException(status_code=400, detail=f"Geen overlap in data. Hass heeft {len(energy_df)} rijen.")
-        
-        # --- EINDE NIEUWE BLOK ---
+        if len(train_df) < 24:
+            print(f"❌ DEBUG: Hass range: {energy_df.index.min()} tot {energy_df.index.max()}")
+            print(f"❌ DEBUG: Weer range: {meteo_df.index.min()} tot {meteo_df.index.max()}")
+            raise HTTPException(status_code=400, detail=f"Te weinig overlap. Hass: {len(energy_df)}, Match: {len(train_df)}")
 
-        from backend.app.services.ml import add_time_features
+        # 3. FEATURES & TRAINING
         train_df = add_time_features(train_df)
-
         print("🤖 LightGBM model trainen...")
         metrics = ms.train(panel_id, train_df)
         
@@ -93,39 +88,30 @@ def train_panel(panel_id: str, days: int = 30):
 def predict_panel(panel_id: str, days: int = 7):
     try:
         panel = repo.get(panel_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Paneel niet gevonden")
+        trained = ms.load(panel_id)
 
-    trained = ms.load(panel_id)
+        meteo_fc = meteo.fetch_hourly_forecast(
+            latitude=panel.latitude, longitude=panel.longitude,
+            days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
+        )
 
-    # Haal forecast op
-    meteo_fc = meteo.fetch_hourly_forecast(
-        latitude=panel.latitude, longitude=panel.longitude,
-        days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
-        timezone="Europe/Amsterdam"
-    )
+        df = meteo_fc.copy()
+        df["time"] = pd.to_datetime(df.index, utc=True)
+        
+        # Voeg dummy features toe zodat model niet klaagt over missende kolommen
+        df["kwh_lag_24"] = 0.0 
+        df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
 
-    df = meteo_fc.copy()
-    
-    # Maak de features aan die LightGBM verwacht
-    df["kwh_lag_24"] = 0.0  # In live predictie hebben we geen echte lag van gisteren
-    df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
-    
-    # Fix voor de tijd kolom
-    if "time" not in df.columns:
-        df["time"] = df.index
+        df = add_time_features(df, "time")
+        pred = ms.predict(trained, df)
 
-    df = add_time_features(df, "time")
-    
-    # Doe de voorspelling met het LightGBM model
-    pred = ms.predict(trained, df)
+        out = []
+        for t, y in zip(df["time"], pred):
+            out.append({"time": t.isoformat(), "kwh": float(y)})
 
-    out = []
-    times = pd.to_datetime(df["time"]).dt.tz_localize("Europe/Amsterdam", nonexistent="shift_forward", ambiguous="NaT")
-    for t, y in zip(times, pred):
-        out.append({"time": t.isoformat(), "kwh": float(y)})
-
-    return {"ok": True, "panel_id": panel_id, "forecast": out}
+        return {"ok": True, "panel_id": panel_id, "forecast": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/panels")
 def list_panels():
@@ -141,14 +127,7 @@ def delete_panel(panel_id: str):
     repo.delete(panel_id)
     return {"ok": True}
 
-# --- Helemaal onderaan in backend/app/main.py ---
-
-# We definiëren het pad naar de map waar index.html nu staat
+# Static files
 static_path = Path("/opt/pv-panel-predictor/frontend")
-
 if static_path.exists():
-    # De 'html=True' zorgt ervoor dat /ui/ automatisch index.html zoekt
     app.mount("/ui", StaticFiles(directory=str(static_path), html=True), name="ui")
-    print(f"✅ UI gemount op http://LXC-IP:8000/ui/ (bron: {static_path})")
-else:
-    print(f"⚠️ Waarschuwing: Kan frontend map niet vinden op {static_path}")
