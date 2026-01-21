@@ -149,3 +149,31 @@ class OpenMeteoClient:
             models=models,
             historical=True,
         )
+
+    def fetch_hourly_forecast(
+        self,
+        latitude: float,
+        longitude: float,
+        start_date: date,
+        end_date: date,
+        tilt_deg: float,
+        azimuth_deg: float,
+        timezone: str = "Europe/Amsterdam",
+        models: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Convenience wrapper used by predict endpoint.
+        Uses the regular forecast host (not historical).
+        """
+        return self.fetch_hourly_range(
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+            tilt_deg=tilt_deg,
+            azimuth_deg=azimuth_deg,
+            timezone=timezone,
+            models=models,
+            historical=False,
+        )
+
