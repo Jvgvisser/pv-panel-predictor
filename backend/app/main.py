@@ -121,8 +121,14 @@ def delete_panel(panel_id: str):
     repo.delete(panel_id)
     return {"ok": True}
 
-# Gebruik het exacte pad waar het bestand nu staat
+# --- Helemaal onderaan in backend/app/main.py ---
+
+# We definiëren het pad naar de map waar index.html nu staat
 static_path = Path("/opt/pv-panel-predictor/frontend")
 
-if (static_path / "index.html").exists():
-    app.mount("/", StaticFiles(directory=str(static_path), html=True), name="static")
+if static_path.exists():
+    # De 'html=True' zorgt ervoor dat /ui/ automatisch index.html zoekt
+    app.mount("/ui", StaticFiles(directory=str(static_path), html=True), name="ui")
+    print(f"✅ UI gemount op http://LXC-IP:8000/ui/ (bron: {static_path})")
+else:
+    print(f"⚠️ Waarschuwing: Kan frontend map niet vinden op {static_path}")
