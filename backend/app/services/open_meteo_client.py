@@ -159,13 +159,19 @@ class OpenMeteoClient:
         azimuth_deg: float = 0.0,
         timezone: str = "Europe/Amsterdam",
         models: Optional[str] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        **_: object,
     ) -> pd.DataFrame:
         """
         Convenience wrapper used by predict endpoint.
-        Uses the regular forecast host (not historical).
+        Accepts either days or explicit start/end dates.
+        Ignores unknown kwargs for forward-compatibility.
         """
-        start_date = date.today()
-        end_date = start_date + timedelta(days=int(days))
+        if start_date is None:
+            start_date = date.today()
+        if end_date is None:
+            end_date = start_date + timedelta(days=int(days))
 
         return self.fetch_hourly_range(
             latitude=latitude,
