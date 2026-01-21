@@ -12,10 +12,21 @@ from sklearn.metrics import mean_absolute_error
 
 def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     out = df.copy()
-    t = pd.to_datetime(out[time_col])
 
-    out["hour"] = t.dt.hour
-    out["doy"] = t.dt.dayofyear
+    # Support both: time as column OR as DatetimeIndex
+    if time_col in out.columns:
+        t = pd.to_datetime(out[time_col], utc=True, errors="coerce")
+    elif isinstance(out.index, pd.DatetimeIndex):
+        t = out.index
+        if t.tz is None:
+            t = t.tz_localize("UTC")
+        else:
+            t = t.tz_convert("UTC")
+    else:
+        raise ValueError("add_time_features: need 'time' column or DatetimeIndex")
+
+    out["hour"] = t.hour
+    out["doy"] = t.dayofyear
 
     out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24.0)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24.0)
@@ -24,34 +35,18 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     return out
 
 
-def build_training_frame(energy, meteo):
-    import pandas as pd
+def build_training_frame(energy: pd.DataFrame, meteo: pd.DataFrame) -> pd.DataFrame:
+    """
+    Backwards compatible entrypoint used elsewhere in the app.
+    We route everything through the DST-safe index-join builder.
+    """
+    return build_training_frame_idxjoin(energy, meteo)
 
-    def norm(df):
-        df = df.copy()
 
-        # if time zit in index → reset
-        if df.index.name == "time" or "time" in getattr(df.index, "names", []):
-            df = df.reset_index()
-
-        if "time" not in df.columns:
-            raise KeyError("time")
-
-        df["time"] = pd.to_datetime(df["time"], errors="coerce")
-        df = df.dropna(subset=["time"])
-
-        df = df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
-        return df
-
-    m = norm(meteo)
-    e = norm(energy)
-
-    df = pd.merge(m, e, on="time", how="inner").sort_values("time")
-    return df
-
+@dataclass
 class TrainedModel:
     model: LGBMRegressor
-    features: list
+    features: list[str]
 
 
 class PanelModelService:
@@ -76,6 +71,14 @@ class PanelModelService:
             "doy_sin", "doy_cos",
         ]
 
+        if "time" not in df.columns:
+            # if someone passes an indexed df, keep it usable
+            if isinstance(df.index, pd.DatetimeIndex):
+                df = df.copy()
+                df["time"] = df.index
+            else:
+                raise ValueError("train(): expected df with 'time' column or DatetimeIndex")
+
         df = df.sort_values("time")
 
         # Validation: last 7 days (168h) when available
@@ -86,7 +89,6 @@ class PanelModelService:
         X_train = train_df[features]
         y_train = train_df["kwh"]
 
-        # LightGBM settings: good default for 1 year hourly series
         model = LGBMRegressor(
             n_estimators=1200,
             learning_rate=0.03,
@@ -100,8 +102,7 @@ class PanelModelService:
             n_jobs=-1,
         )
 
-        # Early stopping if we have a validation set
-        metrics = {"train_rows": int(len(train_df))}
+        metrics: dict = {"train_rows": int(len(train_df))}
         if len(val_df) > 0:
             X_val = val_df[features]
             y_val = val_df["kwh"]
@@ -120,7 +121,6 @@ class PanelModelService:
         else:
             model.fit(X_train, y_train)
 
-        # Feature importance (handig voor debug)
         try:
             imp = list(zip(features, model.feature_importances_.tolist()))
             imp.sort(key=lambda x: x[1], reverse=True)
@@ -142,20 +142,22 @@ class PanelModelService:
         pred = trained.model.predict(X)
         pred = np.clip(pred, 0, None)
 
-        # Force nights to zero (no irradiance)
         if "global_tilted_irradiance" in feature_df.columns:
             pred = np.where(feature_df["global_tilted_irradiance"].to_numpy() <= 0.5, 0.0, pred)
 
         return pred
 
+
 def build_training_frame_idxjoin(energy: pd.DataFrame, meteo: pd.DataFrame) -> pd.DataFrame:
     """
     DST-safe training frame builder.
     Joins energy and meteo on DatetimeIndex (no merge on 'time' column).
+    Output includes a 'time' column for downstream code that expects it.
     """
     e = energy.copy()
     m = meteo.copy()
 
+    # Accept either "time" column or DatetimeIndex
     if "time" in e.columns and not isinstance(e.index, pd.DatetimeIndex):
         e["time"] = pd.to_datetime(e["time"], utc=True, errors="coerce")
         e = e.dropna(subset=["time"]).set_index("time")
@@ -166,23 +168,42 @@ def build_training_frame_idxjoin(energy: pd.DataFrame, meteo: pd.DataFrame) -> p
     if not isinstance(e.index, pd.DatetimeIndex) or not isinstance(m.index, pd.DatetimeIndex):
         raise ValueError("energy/meteo must have a DatetimeIndex (or a 'time' column to set index)")
 
-    if e.index.tz is None and m.index.tz is not None:
+    # Normalize tz to UTC
+    if e.index.tz is None:
         e.index = e.index.tz_localize("UTC")
-    if m.index.tz is None and e.index.tz is not None:
-        m.index = m.index.tz_localize("UTC")
+    else:
+        e.index = e.index.tz_convert("UTC")
 
+    if m.index.tz is None:
+        m.index = m.index.tz_localize("UTC")
+    else:
+        m.index = m.index.tz_convert("UTC")
+
+    # If someone left a 'time' column behind, drop it to avoid ambiguity
     if "time" in e.columns:
         e = e.drop(columns=["time"])
     if "time" in m.columns:
         m = m.drop(columns=["time"])
 
+    # Join on index (UTC hourly timeline)
     df = e.join(m, how="inner").sort_index()
 
-    df["kwh_lag_24"] = df["kwh"].shift(24)
+    # Lags
+    if "kwh" in df.columns:
+        df["kwh_lag_24"] = df["kwh"].shift(24)
+    else:
+        raise ValueError("Expected 'kwh' in energy data")
+
     if "global_tilted_irradiance" in df.columns:
         df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24)
 
+    # Provide time column too
+    df["time"] = df.index
+
+    # Time features (works on column or index)
     df = add_time_features(df)
+
+    # Drop rows where lag/features are missing
     df = df.dropna()
     return df
 
