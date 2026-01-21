@@ -1,214 +1,222 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="nl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>PV Panel Predictor</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 1100px; }
-    input, textarea { padding: 8px; width: 100%; margin: 6px 0 12px; box-sizing: border-box; }
-    button { padding: 10px 12px; margin: 6px 8px 6px 0; cursor: pointer; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
-    pre { background: #f6f8fa; padding: 12px; overflow: auto; border-radius: 10px; }
-    .row { border: 1px solid #ddd; padding: 12px; border-radius: 12px; margin: 10px 0; }
-    .muted { color: #666; font-size: 13px; }
-    .small { font-size: 13px; }
-    .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; margin-left:8px; }
-    .cols { display:grid; grid-template-columns: 2fr 3fr 1fr 1fr; gap: 10px; }
-    .cols2 { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .hr { height:1px; background:#eee; margin: 14px 0; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PV Predictor Dashboard - 28 Panelen</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading { cursor: wait; opacity: 0.5; pointer-events: none; }
+    </style>
 </head>
-<body>
-  <h1>PV Panel Predictor <span class="pill">multi-panel</span></h1>
-  <p class="muted">
-    Beheer panelen (entity_id + tilt/azimuth) en train/predict per paneel of bulk.
-    Open-Meteo azimuth: 0=Zuid, -90=Oost, +90=West, ±180=Noord.
-  </p>
+<body class="bg-gray-100 min-h-screen p-4 font-sans">
 
-  <div class="grid">
-    <div>
-      <h2>Nieuw / Update paneel</h2>
-      <div class="cols2">
-        <div>
-          <label>panel_id</label>
-          <input id="panel_id" placeholder="panel_122030057513" />
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-xl shadow-sm border-b-4 border-yellow-400">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Zonnepanelen Voorspeller</h1>
+                <p class="text-gray-500 font-medium">Systeem: 28 Panelen in Voorburg</p>
+            </div>
+            <div class="mt-4 md:mt-0 space-x-2">
+                <button onclick="init()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
+                    🔄 Ververs Data
+                </button>
+                <button id="trainBtn" onclick="trainAll()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg shadow-md transition">
+                    🚀 Train Alle Panelen (365d)
+                </button>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h2 class="text-xl font-semibold mb-4 text-gray-700 flex items-center">
+                    <span class="mr-2">📈</span> Verwacht verloop per uur (7 dagen)
+                </h2>
+                <div class="h-80 w-full">
+                    <canvas id="totalChart"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+                <h2 class="text-xl font-semibold mb-4 text-gray-700 flex items-center">
+                    <span class="mr-2">📊</span> Totale opbrengst per dag
+                </h2>
+                <div class="h-80 w-full">
+                    <canvas id="dailyBarChart"></canvas>
+                </div>
+            </div>
         </div>
-        <div>
-          <label>scale_to_kwh (Wh→kWh = 0.001)</label>
-          <input id="scale_to_kwh" value="0.001" />
+
+        <div class="mb-4">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Individuele Paneel Status</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" id="panelGrid">
+                </div>
         </div>
-      </div>
-
-      <label>entity_id</label>
-      <input id="entity_id" value="sensor.inverter_122030057513_lifetime_energy_production" />
-
-      <div class="cols2">
-        <div>
-          <label>tilt (deg)</label>
-          <input id="tilt" value="35" />
-        </div>
-        <div>
-          <label>azimuth (deg)</label>
-          <input id="azimuth" value="0" />
-        </div>
-      </div>
-
-      <div class="cols2">
-        <div>
-          <label>latitude</label>
-          <input id="lat" placeholder="52.0" />
-        </div>
-        <div>
-          <label>longitude</label>
-          <input id="lon" placeholder="4.3" />
-        </div>
-      </div>
-
-      <label>Home Assistant base URL</label>
-      <input id="ha_url" placeholder="http://homeassistant.local:8123" />
-
-      <label>Home Assistant long-lived token</label>
-      <input id="ha_token" placeholder="eyJ0eXAiOiJKV1QiLCJh..." />
-
-      <div>
-        <button onclick="savePanel()">Opslaan</button>
-        <button onclick="loadPanels()">Ververs</button>
-        <button onclick="exportPanels()">Export JSON</button>
-      </div>
-
-      <div class="hr"></div>
-
-      <h2>Import (28 panelen in 1 keer)</h2>
-      <p class="muted small">
-        Plak hier JSON array met panel configs. Voor ieder item minimaal: panel_id, entity_id, tilt_deg, azimuth_deg, latitude, longitude, ha_base_url, ha_token.
-        scale_to_kwh is optioneel (default 0.001).
-      </p>
-      <textarea id="import_json" rows="10" placeholder='[{"panel_id":"p1","entity_id":"sensor...","tilt_deg":35,"azimuth_deg":0,"latitude":52.0,"longitude":4.3,"ha_base_url":"http://...","ha_token":"..."}]'></textarea>
-      <button onclick="importPanels()">Import JSON</button>
     </div>
 
-    <div>
-      <h2>Bulk acties</h2>
-      <button onclick="bulkTrain(30)">Train ALL (30d)</button>
-      <button onclick="bulkTrain(365)">Train ALL (365d)</button>
-      <button onclick="bulkPredict(7)">Predict ALL (7d)</button>
-      <div class="hr"></div>
+    <script>
+        let totalChart;
+        let dailyBarChart;
 
-      <h2>Debug</h2>
-      <pre id="debug"></pre>
-    </div>
-  </div>
+        async function init() {
+            try {
+                const res = await fetch('/api/panels');
+                const panels = await res.json();
+                renderPanelGrid(panels);
+                updateForecasts(panels);
+            } catch (e) {
+                console.error("Fout bij laden panelen:", e);
+            }
+        }
 
-  <h2>Panelen</h2>
-  <div id="panels"></div>
+        function renderPanelGrid(panels) {
+            const grid = document.getElementById('panelGrid');
+            grid.innerHTML = '';
+            panels.forEach(p => {
+                const card = document.createElement('div');
+                card.className = "bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col justify-between";
+                card.innerHTML = `
+                    <div class="mb-3">
+                        <div class="flex justify-between items-center">
+                            <span class="font-mono font-bold text-blue-600 text-lg">${p.id}</span>
+                            <span class="text-[10px] bg-gray-100 px-2 py-1 rounded text-gray-500">HA Sensor</span>
+                        </div>
+                        <p class="text-[10px] text-gray-400 truncate">${p.entity_id}</p>
+                    </div>
+                    <div class="flex space-x-2">
+                        <button onclick="trainOne('${p.id}')" class="flex-1 text-xs bg-gray-50 hover:bg-gray-200 py-2 rounded border border-gray-200 transition">Train</button>
+                        <button onclick="predictOne('${p.id}')" class="flex-1 text-xs bg-green-50 text-green-700 hover:bg-green-100 py-2 rounded border border-green-200 transition">Check</button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
 
-<script>
-function v(id){ return document.getElementById(id).value.trim(); }
+        async function trainOne(id) {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerText = 'Bezig...';
+            try {
+                const res = await fetch(`/api/panels/${id}/train?days=365`, { method: 'POST' });
+                const data = await res.json();
+                alert(`${id}: ${data.ok ? 'Training voltooid!' : 'Fout opgetreden'}`);
+            } catch (e) {
+                alert(`Fout bij verbinding met server voor ${id}`);
+            }
+            btn.classList.remove('loading');
+            btn.innerText = 'Train';
+        }
 
-async function loadPanels() {
-  const r = await fetch('/api/panels');
-  const j = await r.json();
-  const el = document.getElementById('panels');
-  el.innerHTML = '';
-  (j.panels || []).forEach(p => {
-    const div = document.createElement('div');
-    div.className = 'row';
-    div.innerHTML = `
-      <div class="cols">
-        <div><b>${p.panel_id}</b></div>
-        <div class="small">${p.entity_id}</div>
-        <div class="small">tilt: <b>${p.tilt_deg}</b>°</div>
-        <div class="small">azi: <b>${p.azimuth_deg}</b>°</div>
-      </div>
-      <div class="muted small">lat/lon: ${p.latitude}, ${p.longitude} · HA: ${p.ha_base_url} · scale_to_kwh: ${p.scale_to_kwh ?? 0.001}</div>
-      <div style="margin-top:10px;">
-        <button onclick="train('${p.panel_id}', 30)">Train 30d</button>
-        <button onclick="train('${p.panel_id}', 365)">Train 365d</button>
-        <button onclick="predict('${p.panel_id}', 7)">Predict 7d</button>
-        <button onclick="delPanel('${p.panel_id}')">Delete</button>
-      </div>
-    `;
-    el.appendChild(div);
-  });
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-}
+        async function trainAll() {
+            if(!confirm("Wil je alle 28 panelen trainen op 365 dagen data? Dit duurt enkele minuten.")) return;
+            const btn = document.getElementById('trainBtn');
+            btn.classList.add('loading');
+            btn.innerText = '⏳ Batch training bezig...';
+            
+            const res = await fetch('/api/panels');
+            const panels = await res.json();
+            
+            for(let p of panels) {
+                try {
+                    await fetch(`/api/panels/${p.id}/train?days=365`, { method: 'POST' });
+                    console.log(`Klaar met ${p.id}`);
+                } catch (e) { console.error(`Fout bij ${p.id}`); }
+            }
+            
+            alert("Alle trainingen zijn afgerond!");
+            btn.classList.remove('loading');
+            btn.innerText = '🚀 Train Alle Panelen (365d)';
+            init();
+        }
 
-async function savePanel() {
-  const payload = {
-    panel_id: v('panel_id'),
-    entity_id: v('entity_id'),
-    tilt_deg: parseFloat(v('tilt')),
-    azimuth_deg: parseFloat(v('azimuth')),
-    latitude: parseFloat(v('lat')),
-    longitude: parseFloat(v('lon')),
-    ha_base_url: v('ha_url'),
-    ha_token: v('ha_token'),
-    scale_to_kwh: parseFloat(v('scale_to_kwh') || "0.001"),
-  };
-  const r = await fetch('/api/panels', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  const j = await r.json();
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-  await loadPanels();
-}
+        async function updateForecasts(panels) {
+            const promises = panels.map(p => fetch(`/api/panels/${p.id}/predict?days=7`).then(r => r.json()));
+            const results = await Promise.all(promises);
+            
+            let hourlyData = {};
+            let dailyData = {};
 
-async function delPanel(id) {
-  await fetch(`/api/panels/${id}`, { method:'DELETE' });
-  await loadPanels();
-}
+            results.forEach(res => {
+                if(res.ok && res.forecast) {
+                    res.forecast.forEach(f => {
+                        hourlyData[f.time] = (hourlyData[f.time] || 0) + f.kwh;
+                        const day = f.time.split('T')[0]; 
+                        dailyData[day] = (dailyData[day] || 0) + f.kwh;
+                    });
+                }
+            });
 
-async function train(id, days) {
-  const r = await fetch(`/api/panels/${id}/train?days=${days}`, { method:'POST' });
-  const j = await r.json();
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-}
+            renderLineChart(hourlyData);
+            renderBarChart(dailyData);
+        }
 
-async function predict(id, days) {
-  const r = await fetch(`/api/panels/${id}/predict?days=${days}`);
-  const j = await r.json();
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-}
+        function renderLineChart(data) {
+            const labels = Object.keys(data);
+            const values = Object.values(data);
+            if (totalChart) totalChart.destroy();
+            const ctx = document.getElementById('totalChart').getContext('2d');
+            totalChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels.map(l => new Date(l).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'})),
+                    datasets: [{
+                        label: 'Totaal kWh per uur',
+                        data: values,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
 
-async function exportPanels() {
-  const r = await fetch('/api/panels');
-  const j = await r.json();
-  const text = JSON.stringify(j.panels || [], null, 2);
-  navigator.clipboard.writeText(text);
-  document.getElementById('debug').textContent = "Exported panels JSON to clipboard.\n\n" + text;
-}
+        function renderBarChart(data) {
+            const labels = Object.keys(data);
+            const values = Object.values(data);
+            if (dailyBarChart) dailyBarChart.destroy();
+            const ctx = document.getElementById('dailyBarChart').getContext('2d');
+            dailyBarChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels.map(d => new Date(d).toLocaleDateString('nl-NL', {weekday: 'short', day: 'numeric'})),
+                    datasets: [{
+                        label: 'Totaal kWh per dag',
+                        data: values,
+                        backgroundColor: '#f59e0b',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
 
-async function importPanels() {
-  let raw = document.getElementById('import_json').value;
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) throw new Error("Must be a JSON array");
-    for (const p of arr) {
-      // defaults
-      if (p.scale_to_kwh === undefined) p.scale_to_kwh = 0.001;
-      const r = await fetch('/api/panels', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p) });
-      const j = await r.json();
-      if (!j.ok) throw new Error(JSON.stringify(j));
-    }
-    await loadPanels();
-    document.getElementById('debug').textContent = "Import OK: " + arr.length + " panels";
-  } catch(e) {
-    document.getElementById('debug').textContent = "Import failed: " + e;
-  }
-}
+        async function predictOne(id) {
+            const res = await fetch(`/api/panels/${id}/predict?days=7`);
+            const data = await res.json();
+            if(data.ok) {
+                renderLineChart(data.forecast.reduce((acc, curr) => {
+                    acc[curr.time] = curr.kwh;
+                    return acc;
+                }, {}));
+                alert(`Grafiek tijdelijk aangepast naar alleen paneel ${id}`);
+            }
+        }
 
-async function bulkTrain(days) {
-  const r = await fetch(`/api/train_all?days=${days}`, { method:'POST' });
-  const j = await r.json();
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-}
-
-async function bulkPredict(days) {
-  const r = await fetch(`/api/predict_all?days=${days}`);
-  const j = await r.json();
-  document.getElementById('debug').textContent = JSON.stringify(j, null, 2);
-}
-
-loadPanels();
-</script>
+        init();
+    </script>
 </body>
 </html>
