@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,30 +10,22 @@
         .container { max-width: 1300px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .card { border: 1px solid #eef0f2; padding: 20px; border-radius: 10px; margin-bottom: 25px; background: #fff; }
         .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        
-        /* Grafiek Toggle Knoppen */
         .view-toggle button { background: #fff; border: 1px solid #d1d9e0; padding: 8px 16px; cursor: pointer; border-radius: 6px; font-weight: 600; transition: 0.2s; }
         .view-toggle button.active { background: #1a73e8; color: white; border-color: #1a73e8; }
-        
-        /* Tabel styling */
         .table-container { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
         th, td { padding: 12px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
         th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; letter-spacing: 0.5px; }
-        
-        input { padding: 8px; border: 1px solid #dadce0; border-radius: 4px; width: 100%; box-sizing: border-box; outline: none; }
-        input:focus { border-color: #1a73e8; }
-        
-        /* Knoppen */
-        .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; justify-content: center; }
-        .btn:hover { opacity: 0.85; }
+        input { padding: 8px; border: 1px solid #dadce0; border-radius: 4px; width: 100%; box-sizing: border-box; }
+        .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; }
         .btn-blue { background: #1a73e8; color: white; }
         .btn-green { background: #34a853; color: white; }
         .btn-orange { background: #fbbc05; color: white; }
         .btn-red { background: #ea4335; color: white; }
-        
+        .btn-purple { background: #6f42c1; color: white; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .chart-container { height: 450px; position: relative; }
+        .chart-container { height: 350px; position: relative; margin-bottom: 20px; }
+        #loading-overlay { display: none; color: #1a73e8; font-weight: bold; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -42,57 +34,69 @@
     <div class="chart-header">
         <h1>☀️ Solar Forecast Dashboard</h1>
         <div class="view-toggle">
-            <button id="btn-2d" class="active" onclick="setView(2)">2 Dagen</button>
-            <button id="btn-7d" onclick="setView(7)">7 Dagen</button>
+            <button id="btn-refresh" onclick="refreshData()">🔄 Total Overview</button>
+            <button id="btn-2d" class="active" onclick="setView(2)">Hourly 2d</button>
+            <button id="btn-7d" onclick="setView(7)">Hourly 7d</button>
         </div>
     </div>
 
     <div class="card">
-        <h2 id="chart-title">Totaal Voorspelling (kWh)</h2>
+        <h2 id="chart-title">Hourly Forecast (kWh)</h2>
         <div class="chart-container">
             <canvas id="mainChart"></canvas>
         </div>
     </div>
 
     <div class="card">
-        <h3>Paneel Management</h3>
+        <h2 id="daily-chart-title">Daily Forecast (Total kWh)</h2>
+        <div class="chart-container">
+            <canvas id="dailyChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h3>Panel Management</h3>
+            <button class="btn btn-purple" onclick="trainAllPanels()">🎓 Train All Models</button>
+        </div>
+        <div id="loading-overlay">Processing training... please wait.</div>
         <div class="table-container">
             <table>
                 <thead>
                     <tr>
                         <th style="width: 50px;">ID</th>
-                        <th>Naam</th>
+                        <th>Friendly Name</th>
                         <th>HA Entity ID</th>
                         <th style="width: 80px;">Wp</th>
-                        <th style="width: 70px;">Hoek</th>
+                        <th style="width: 70px;">Tilt</th>
                         <th style="width: 70px;">Azi</th>
-                        <th style="text-align: center;">Acties</th>
+                        <th style="text-align: center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="panels-body"></tbody>
             </table>
         </div>
-        <button class="btn btn-blue" style="margin-top:20px;" onclick="addNewPanelRow()">➕ Nieuw Paneel Toevoegen</button>
+        <button class="btn btn-blue" style="margin-top:20px;" onclick="addNewPanelRow()">➕ Add New Panel</button>
     </div>
 
     <div class="card" style="background: #f8f9fa; border: 1px dashed #ccc;">
-        <h3>Systeem Instellingen</h3>
+        <h3>System Settings</h3>
         <div class="grid">
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">Home Assistant URL</label>
                 <input type="text" id="ha_url" placeholder="http://192.168.1.xxx:8123">
             </div>
             <div>
-                <label style="font-size: 0.8em; font-weight: bold;">Long-Lived Access Token</label>
-                <input type="password" id="ha_token" placeholder="v3_eyJhbGciOiJIUzI1NiI...">
+                <label style="font-size: 0.8em; font-weight: bold;">HA Access Token</label>
+                <input type="password" id="ha_token" placeholder="Long-lived token">
             </div>
         </div>
-        <button class="btn btn-green" style="margin-top:15px; width:100%; height: 45px;" onclick="saveGlobalConfig()">💾 Sla HA-configuratie op voor alles</button>
+        <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Save HA Configuration for All Panels</button>
     </div>
 </div>
 
 <script>
-let mainChart;
+let mainChart, dailyChart;
 let currentViewDays = 2;
 
 async function init() {
@@ -125,10 +129,10 @@ async function loadSettings() {
             <td><input type="number" class="p-tilt" value="${p.tilt_deg}"></td>
             <td><input type="number" class="p-azi" value="${p.azimuth_deg}"></td>
             <td style="text-align: center;">
-                <button class="btn btn-green" title="Opslaan" onclick="savePanel('${p.panel_id}', this)">💾</button>
-                <button class="btn btn-orange" title="Train Model" onclick="trainPanel('${p.panel_id}')">🎓</button>
-                <button class="btn btn-blue" title="Toon dit paneel" onclick="showSinglePanel('${p.panel_id}')">📈</button>
-                <button class="btn btn-red" title="Verwijder" onclick="deletePanel('${p.panel_id}')">🗑️</button>
+                <button class="btn btn-green" title="Save" onclick="savePanel('${p.panel_id}', this)">💾</button>
+                <button class="btn btn-orange" title="Train" onclick="trainPanel('${p.panel_id}')">🎓</button>
+                <button class="btn btn-blue" title="Show Chart" onclick="showSinglePanel('${p.panel_id}')">📈</button>
+                <button class="btn btn-red" title="Delete" onclick="deletePanel('${p.panel_id}')">🗑️</button>
             </td>
         `;
     });
@@ -137,35 +141,82 @@ async function loadSettings() {
 async function refreshData() {
     const panels = await fetch('/api/panels').then(r => r.json());
     let combined = {};
-
     for (const p of panels) {
         try {
-            const res = await fetch(`/api/panels/${p.panel_id}/predict?days=${currentViewDays}`);
+            const res = await fetch(`/api/panels/${p.panel_id}/predict?days=7`);
             const data = await res.json();
-            data.forecast.forEach(pt => {
-                combined[pt.time] = (combined[pt.time] || 0) + pt.kwh;
-            });
-        } catch(e) { console.error("Fout bij laden van " + p.panel_id, e); }
+            data.forecast.forEach(pt => { combined[pt.time] = (combined[pt.time] || 0) + pt.kwh; });
+        } catch(e) {}
     }
-    document.getElementById('chart-title').innerText = `Totaal Voorspelling (Alle Panelen) - ${currentViewDays} Dagen`;
-    updateChart(combined, "Gecombineerd Totaal (kWh)", "#1a73e8");
+    document.getElementById('chart-title').innerText = `Total per hour (${currentViewDays} days)`;
+    document.getElementById('daily-chart-title').innerText = "Total per day (7 days)";
+    updateCharts(combined, "#1a73e8", "Combined Total");
 }
 
 async function showSinglePanel(id) {
-    const res = await fetch(`/api/panels/${id}/predict?days=${currentViewDays}`);
+    const res = await fetch(`/api/panels/${id}/predict?days=7`);
     const data = await res.json();
     let single = {};
     data.forecast.forEach(pt => { single[pt.time] = pt.kwh; });
-    document.getElementById('chart-title').innerText = `Voorspelling voor: ${id}`;
-    updateChart(single, `Opbrengst ${id} (kWh)`, "#fd7e14");
+    document.getElementById('chart-title').innerText = `Forecast ${id} per hour (${currentViewDays} days)`;
+    document.getElementById('daily-chart-title').innerText = `Forecast ${id} per day (7 days)`;
+    updateCharts(single, "#fd7e14", `Yield ${id}`);
 }
 
 async function trainPanel(id) {
-    if(!confirm(`Wil je de training starten voor ${id}? Dit gebruikt de data van de laatste 30 dagen.`)) return;
     const res = await fetch(`/api/panels/${id}/train?days=30`, {method: 'POST'});
     const data = await res.json();
-    alert(`Training succesvol!\nNauwkeurigheid (R2): ${data.metrics.r2.toFixed(3)}\nData-punten: ${data.rows}`);
+    console.log(`Trained ${id}: R2 ${data.metrics.r2}`);
+    return data;
+}
+
+async function trainAllPanels() {
+    if(!confirm('This will retrain all models using the last 30 days of data. Continue?')) return;
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.display = 'block';
+    
+    const panels = await fetch('/api/panels').then(r => r.json());
+    for (const p of panels) {
+        overlay.innerText = `Training ${p.panel_id} (${p.friendly_name})...`;
+        await trainPanel(p.panel_id);
+    }
+    
+    overlay.style.display = 'none';
+    alert('All models have been successfully retrained!');
     refreshData();
+}
+
+function updateCharts(dataDict, color, labelPrefix) {
+    const allLabels = Object.keys(dataDict).sort();
+    const limit = currentViewDays * 24;
+    const hourLabels = allLabels.slice(0, limit);
+    const hourValues = hourLabels.map(l => dataDict[l]);
+    const hourTimeLabels = hourLabels.map(l => {
+        const d = new Date(l);
+        return `${d.getHours()}:00 (${d.getDate()}-${d.getMonth()+1})`;
+    });
+
+    let dailyTotals = {};
+    allLabels.forEach(l => {
+        const dateKey = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short'});
+        dailyTotals[dateKey] = (dailyTotals[dateKey] || 0) + dataDict[l];
+    });
+    const dayLabels = Object.keys(dailyTotals);
+    const dayValues = Object.values(dailyTotals);
+
+    if (mainChart) mainChart.destroy();
+    mainChart = new Chart(document.getElementById('mainChart'), {
+        type: 'bar',
+        data: { labels: hourTimeLabels, datasets: [{ label: `${labelPrefix} (kWh/h)`, data: hourValues, backgroundColor: color, borderRadius: 3 }] },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+    });
+
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = new Chart(document.getElementById('dailyChart'), {
+        type: 'bar',
+        data: { labels: dayLabels, datasets: [{ label: `${labelPrefix} (Daily Total kWh)`, data: dayValues, backgroundColor: color, borderRadius: 5 }] },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+    });
 }
 
 async function savePanel(id, btn) {
@@ -177,90 +228,32 @@ async function savePanel(id, btn) {
         watt_peak: parseFloat(row.querySelector('.p-wp').value),
         tilt_deg: parseFloat(row.querySelector('.p-tilt').value),
         azimuth_deg: parseFloat(row.querySelector('.p-azi').value),
-        latitude: 52.0, // Vul hier je eigen lat in
-        longitude: 5.0,  // Vul hier je eigen lon in
+        latitude: 52.0116,
+        longitude: 4.3571,
         ha_base_url: document.getElementById('ha_url').value,
         ha_token: document.getElementById('ha_token').value,
         scale_to_kwh: 0.001
     };
-    
-    await fetch('/api/panels', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
-    alert('Paneel ' + id + ' opgeslagen!');
+    await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+    alert('Saved!');
 }
 
 async function saveGlobalConfig() {
-    const data = {
-        ha_base_url: document.getElementById('ha_url').value,
-        ha_token: document.getElementById('ha_token').value
-    };
-    await fetch('/api/config/save', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
-    alert('Instellingen toegepast op alle panelen!');
+    const data = { ha_base_url: document.getElementById('ha_url').value, ha_token: document.getElementById('ha_token').value };
+    await fetch('/api/config/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+    alert('Configuration saved for all panels!');
     loadSettings();
 }
 
 async function deletePanel(id) {
-    if(confirm('Weet je zeker dat je dit paneel wilt verwijderen?')) {
-        await fetch(`/api/panels/${id}`, { method: 'DELETE' });
-        loadSettings();
-    }
+    if(confirm('Delete panel?')) { await fetch(`/api/panels/${id}`, { method: 'DELETE' }); loadSettings(); }
 }
 
 function addNewPanelRow() {
     const body = document.getElementById('panels-body');
     const newId = "p" + (body.rows.length + 1).toString().padStart(2, '0');
     const row = body.insertRow();
-    row.innerHTML = `
-        <td><strong>${newId}</strong></td>
-        <td><input type="text" class="p-name" value="Nieuw Paneel"></td>
-        <td><input type="text" class="p-entity" value="sensor.solar_yield"></td>
-        <td><input type="number" class="p-wp" value="400"></td>
-        <td><input type="number" class="p-tilt" value="35"></td>
-        <td><input type="number" class="p-azi" value="0"></td>
-        <td><button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button></td>
-    `;
-}
-
-function updateChart(dataDict, label, color) {
-    const labels = Object.keys(dataDict).sort();
-    const values = labels.map(l => dataDict[l]);
-    const timeLabels = labels.map(l => {
-        const d = new Date(l);
-        const day = d.getDate();
-        const month = d.getMonth() + 1;
-        return `${d.getHours()}:00 (${day}-${month})`;
-    });
-
-    if (mainChart) mainChart.destroy();
-    mainChart = new Chart(document.getElementById('mainChart'), {
-        type: 'bar',
-        data: {
-            labels: timeLabels,
-            datasets: [{
-                label: label,
-                data: values,
-                backgroundColor: color,
-                borderRadius: 5,
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { position: 'top' } },
-            scales: {
-                y: { beginAtZero: true, title: { display: true, text: 'Opbrengst (kWh)' } },
-                x: { ticks: { maxRotation: 45, minRotation: 45 } }
-            }
-        }
-    });
+    row.innerHTML = `<td><strong>${newId}</strong></td><td><input type="text" class="p-name"></td><td><input type="text" class="p-entity"></td><td><input type="number" class="p-wp" value="400"></td><td><input type="number" class="p-tilt" value="35"></td><td><input type="number" class="p-azi" value="0"></td><td><button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button></td>`;
 }
 
 init();
