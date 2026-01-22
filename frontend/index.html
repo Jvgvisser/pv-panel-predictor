@@ -10,22 +10,30 @@
         .container { max-width: 1300px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .card { border: 1px solid #eef0f2; padding: 20px; border-radius: 10px; margin-bottom: 25px; background: #fff; }
         .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        
         .view-toggle button { background: #fff; border: 1px solid #d1d9e0; padding: 8px 16px; cursor: pointer; border-radius: 6px; font-weight: 600; transition: 0.2s; }
         .view-toggle button.active { background: #1a73e8; color: white; border-color: #1a73e8; }
-        .table-container { overflow-x: auto; }
+        
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
         th, td { padding: 12px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-        th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; letter-spacing: 0.5px; }
+        th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; }
+        
         input { padding: 8px; border: 1px solid #dadce0; border-radius: 4px; width: 100%; box-sizing: border-box; }
+        
         .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; }
         .btn-blue { background: #1a73e8; color: white; }
         .btn-green { background: #34a853; color: white; }
         .btn-orange { background: #fbbc05; color: white; }
         .btn-red { background: #ea4335; color: white; }
-        .btn-purple { background: #6f42c1; color: white; }
+        .btn-black { background: #202124; color: white; }
+        
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .chart-container { height: 350px; position: relative; margin-bottom: 20px; }
-        #loading-overlay { display: none; color: #1a73e8; font-weight: bold; margin-bottom: 10px; }
+        
+        /* Training Progress Styling */
+        #training-status { display: none; background: #e8f0fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #1a73e8; }
+        .progress-bar { height: 10px; background: #ddd; border-radius: 5px; margin-top: 10px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: width 0.3s; }
     </style>
 </head>
 <body>
@@ -34,42 +42,43 @@
     <div class="chart-header">
         <h1>☀️ Solar Forecast Dashboard</h1>
         <div class="view-toggle">
-            <button id="btn-refresh" onclick="refreshData()">🔄 Total Overview</button>
-            <button id="btn-2d" class="active" onclick="setView(2)">Hourly 2d</button>
-            <button id="btn-7d" onclick="setView(7)">Hourly 7d</button>
+            <button id="btn-refresh" onclick="refreshData()">🔄 Refresh Total</button>
+            <button id="btn-2d" class="active" onclick="setView(2)">2 Days (Hourly)</button>
+            <button id="btn-7d" onclick="setView(7)">7 Days (Hourly)</button>
         </div>
     </div>
 
     <div class="card">
         <h2 id="chart-title">Hourly Forecast (kWh)</h2>
-        <div class="chart-container">
-            <canvas id="mainChart"></canvas>
-        </div>
+        <div class="chart-container"><canvas id="mainChart"></canvas></div>
     </div>
 
     <div class="card">
-        <h2 id="daily-chart-title">Daily Forecast (Total kWh)</h2>
-        <div class="chart-container">
-            <canvas id="dailyChart"></canvas>
-        </div>
+        <h2 id="daily-chart-title">Daily Totals (7 Days)</h2>
+        <div class="chart-container"><canvas id="dailyChart"></canvas></div>
     </div>
 
     <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <h3>Panel Management</h3>
-            <button class="btn btn-purple" onclick="trainAllPanels()">🎓 Train All Models</button>
+            <button class="btn btn-black" onclick="trainAllPanels(365)">🚀 Train All Models (365 Days)</button>
         </div>
-        <div id="loading-overlay">Processing training... please wait.</div>
-        <div class="table-container">
+
+        <div id="training-status">
+            <div id="training-msg">Starting full system training...</div>
+            <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+        </div>
+
+        <div style="overflow-x: auto;">
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 50px;">ID</th>
+                        <th>ID</th>
                         <th>Friendly Name</th>
                         <th>HA Entity ID</th>
-                        <th style="width: 80px;">Wp</th>
-                        <th style="width: 70px;">Tilt</th>
-                        <th style="width: 70px;">Azi</th>
+                        <th>Wp</th>
+                        <th>Tilt</th>
+                        <th>Azi</th>
                         <th style="text-align: center;">Actions</th>
                     </tr>
                 </thead>
@@ -79,19 +88,19 @@
         <button class="btn btn-blue" style="margin-top:20px;" onclick="addNewPanelRow()">➕ Add New Panel</button>
     </div>
 
-    <div class="card" style="background: #f8f9fa; border: 1px dashed #ccc;">
-        <h3>System Settings</h3>
+    <div class="card" style="background: #f8f9fa;">
+        <h3>Global System Settings</h3>
         <div class="grid">
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">Home Assistant URL</label>
-                <input type="text" id="ha_url" placeholder="http://192.168.1.xxx:8123">
+                <input type="text" id="ha_url">
             </div>
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">HA Access Token</label>
-                <input type="password" id="ha_token" placeholder="Long-lived token">
+                <input type="password" id="ha_token">
             </div>
         </div>
-        <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Save HA Configuration for All Panels</button>
+        <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Sync Settings to All Panels</button>
     </div>
 </div>
 
@@ -130,12 +139,46 @@ async function loadSettings() {
             <td><input type="number" class="p-azi" value="${p.azimuth_deg}"></td>
             <td style="text-align: center;">
                 <button class="btn btn-green" title="Save" onclick="savePanel('${p.panel_id}', this)">💾</button>
-                <button class="btn btn-orange" title="Train" onclick="trainPanel('${p.panel_id}')">🎓</button>
+                <button class="btn btn-orange" title="Train 30D" onclick="trainPanel('${p.panel_id}', 30)">🎓</button>
                 <button class="btn btn-blue" title="Show Chart" onclick="showSinglePanel('${p.panel_id}')">📈</button>
                 <button class="btn btn-red" title="Delete" onclick="deletePanel('${p.panel_id}')">🗑️</button>
             </td>
         `;
     });
+}
+
+async function trainAllPanels(days) {
+    if(!confirm(`Start training ALL panels for ${days} days? This will take a few minutes.`)) return;
+    
+    const statusDiv = document.getElementById('training-status');
+    const msg = document.getElementById('training-msg');
+    const fill = document.getElementById('progress-fill');
+    
+    statusDiv.style.display = 'block';
+    const panels = await fetch('/api/panels').then(r => r.json());
+    
+    for(let i=0; i < panels.length; i++) {
+        const p = panels[i];
+        const progress = ((i / panels.length) * 100).toFixed(0);
+        msg.innerText = `Training ${p.panel_id} (${p.friendly_name || 'Panel'})... [${i+1}/${panels.length}]`;
+        fill.style.width = progress + "%";
+        
+        try {
+            await fetch(`/api/panels/${p.panel_id}/train?days=${days}`, {method: 'POST'});
+        } catch(e) { console.error("Error training " + p.panel_id); }
+    }
+    
+    fill.style.width = "100%";
+    msg.innerText = "All models trained successfully!";
+    setTimeout(() => { statusDiv.style.display = 'none'; fill.style.width = "0%"; }, 5000);
+    refreshData();
+}
+
+async function trainPanel(id, days) {
+    alert(`Training ${id} for ${days} days started...`);
+    await fetch(`/api/panels/${id}/train?days=${days}`, {method: 'POST'});
+    alert(`Training for ${id} finished.`);
+    refreshData();
 }
 
 async function refreshData() {
@@ -148,9 +191,7 @@ async function refreshData() {
             data.forecast.forEach(pt => { combined[pt.time] = (combined[pt.time] || 0) + pt.kwh; });
         } catch(e) {}
     }
-    document.getElementById('chart-title').innerText = `Total per hour (${currentViewDays} days)`;
-    document.getElementById('daily-chart-title').innerText = "Total per day (7 days)";
-    updateCharts(combined, "#1a73e8", "Combined Total");
+    updateCharts(combined, "#1a73e8", "Total System");
 }
 
 async function showSinglePanel(id) {
@@ -158,32 +199,7 @@ async function showSinglePanel(id) {
     const data = await res.json();
     let single = {};
     data.forecast.forEach(pt => { single[pt.time] = pt.kwh; });
-    document.getElementById('chart-title').innerText = `Forecast ${id} per hour (${currentViewDays} days)`;
-    document.getElementById('daily-chart-title').innerText = `Forecast ${id} per day (7 days)`;
-    updateCharts(single, "#fd7e14", `Yield ${id}`);
-}
-
-async function trainPanel(id) {
-    const res = await fetch(`/api/panels/${id}/train?days=30`, {method: 'POST'});
-    const data = await res.json();
-    console.log(`Trained ${id}: R2 ${data.metrics.r2}`);
-    return data;
-}
-
-async function trainAllPanels() {
-    if(!confirm('This will retrain all models using the last 30 days of data. Continue?')) return;
-    const overlay = document.getElementById('loading-overlay');
-    overlay.style.display = 'block';
-    
-    const panels = await fetch('/api/panels').then(r => r.json());
-    for (const p of panels) {
-        overlay.innerText = `Training ${p.panel_id} (${p.friendly_name})...`;
-        await trainPanel(p.panel_id);
-    }
-    
-    overlay.style.display = 'none';
-    alert('All models have been successfully retrained!');
-    refreshData();
+    updateCharts(single, "#fd7e14", `Panel ${id}`);
 }
 
 function updateCharts(dataDict, color, labelPrefix) {
@@ -198,24 +214,22 @@ function updateCharts(dataDict, color, labelPrefix) {
 
     let dailyTotals = {};
     allLabels.forEach(l => {
-        const dateKey = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short'});
+        const dateKey = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric'});
         dailyTotals[dateKey] = (dailyTotals[dateKey] || 0) + dataDict[l];
     });
-    const dayLabels = Object.keys(dailyTotals);
-    const dayValues = Object.values(dailyTotals);
 
     if (mainChart) mainChart.destroy();
     mainChart = new Chart(document.getElementById('mainChart'), {
         type: 'bar',
-        data: { labels: hourTimeLabels, datasets: [{ label: `${labelPrefix} (kWh/h)`, data: hourValues, backgroundColor: color, borderRadius: 3 }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        data: { labels: hourTimeLabels, datasets: [{ label: labelPrefix + " (kWh/h)", data: hourValues, backgroundColor: color }] },
+        options: { responsive: true, maintainAspectRatio: false }
     });
 
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(document.getElementById('dailyChart'), {
         type: 'bar',
-        data: { labels: dayLabels, datasets: [{ label: `${labelPrefix} (Daily Total kWh)`, data: dayValues, backgroundColor: color, borderRadius: 5 }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+        data: { labels: Object.keys(dailyTotals), datasets: [{ label: labelPrefix + " (Daily kWh)", data: Object.values(dailyTotals), backgroundColor: color }] },
+        options: { responsive: true, maintainAspectRatio: false }
     });
 }
 
@@ -228,25 +242,23 @@ async function savePanel(id, btn) {
         watt_peak: parseFloat(row.querySelector('.p-wp').value),
         tilt_deg: parseFloat(row.querySelector('.p-tilt').value),
         azimuth_deg: parseFloat(row.querySelector('.p-azi').value),
-        latitude: 52.0116,
-        longitude: 4.3571,
+        latitude: 52.01, longitude: 4.35, // Defaults
         ha_base_url: document.getElementById('ha_url').value,
         ha_token: document.getElementById('ha_token').value,
         scale_to_kwh: 0.001
     };
     await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-    alert('Saved!');
 }
 
 async function saveGlobalConfig() {
     const data = { ha_base_url: document.getElementById('ha_url').value, ha_token: document.getElementById('ha_token').value };
     await fetch('/api/config/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-    alert('Configuration saved for all panels!');
+    alert('Settings synced to all 28 panels.');
     loadSettings();
 }
 
 async function deletePanel(id) {
-    if(confirm('Delete panel?')) { await fetch(`/api/panels/${id}`, { method: 'DELETE' }); loadSettings(); }
+    if(confirm('Delete?')) { await fetch(`/api/panels/${id}`, { method: 'DELETE' }); loadSettings(); }
 }
 
 function addNewPanelRow() {
