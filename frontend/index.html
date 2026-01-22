@@ -88,7 +88,7 @@
     </div>
 
     <div class="card" style="background: #f8f9fa;">
-        <h3>Global System Settings</h3>
+        <h3>Global System & Location Settings</h3>
         <div class="grid">
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">Home Assistant URL</label>
@@ -98,8 +98,16 @@
                 <label style="font-size: 0.8em; font-weight: bold;">HA Access Token</label>
                 <input type="password" id="ha_token" placeholder="Long-lived access token">
             </div>
+            <div>
+                <label style="font-size: 0.8em; font-weight: bold;">Latitude (Breedtegraad)</label>
+                <input type="number" id="latitude" step="any" placeholder="bv. 52.3676">
+            </div>
+            <div>
+                <label style="font-size: 0.8em; font-weight: bold;">Longitude (Lengtegraad)</label>
+                <input type="number" id="longitude" step="any" placeholder="bv. 4.9041">
+            </div>
         </div>
-        <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Sync Settings to All Panels</button>
+        <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Sync Settings & Location to All Panels</button>
     </div>
 </div>
 
@@ -123,6 +131,8 @@ async function loadSettings() {
     const config = await fetch('/api/config').then(r => r.json());
     document.getElementById('ha_url').value = config.ha_base_url || '';
     document.getElementById('ha_token').value = config.ha_token || '';
+    document.getElementById('latitude').value = config.latitude || 52.3676;
+    document.getElementById('longitude').value = config.longitude || 4.9041;
 
     const panels = await fetch('/api/panels').then(r => r.json());
     const body = document.getElementById('panels-body');
@@ -149,12 +159,15 @@ async function loadSettings() {
 async function savePanel(id, btn) {
     const row = btn.parentElement.parentElement;
     
-    // We halen de waarden op uit de velden
     const friendly_name = row.querySelector('.p-name').value;
     const entity_id = row.querySelector('.p-entity').value;
     const watt_peak = parseFloat(row.querySelector('.p-wp').value);
     const tilt_deg = parseFloat(row.querySelector('.p-tilt').value);
     const azimuth_deg = parseFloat(row.querySelector('.p-azi').value);
+
+    // Gebruik de coördinaten uit de globale velden
+    const lat = parseFloat(document.getElementById('latitude').value);
+    const lon = parseFloat(document.getElementById('longitude').value);
 
     const data = {
         "panel_id": id,
@@ -162,15 +175,13 @@ async function savePanel(id, btn) {
         "entity_id": entity_id,
         "tilt_deg": isNaN(tilt_deg) ? 35.0 : tilt_deg,
         "azimuth_deg": isNaN(azimuth_deg) ? 0.0 : azimuth_deg,
-        "latitude": 52.1326, 
-        "longitude": 5.2913,
+        "latitude": isNaN(lat) ? 52.3676 : lat, 
+        "longitude": isNaN(lon) ? 4.9041 : lon,
         "ha_base_url": document.getElementById('ha_url').value || "",
         "ha_token": document.getElementById('ha_token').value || "",
         "watt_peak": isNaN(watt_peak) ? 400.0 : watt_peak,
         "scale_to_kwh": 0.001
     };
-
-    console.log("Pushing to API:", data);
 
     try {
         const response = await fetch('/api/panels', {
@@ -181,12 +192,9 @@ async function savePanel(id, btn) {
 
         if (response.ok) {
             btn.innerText = "✅";
-            console.log("Save successful");
             setTimeout(() => { btn.innerText = "💾"; }, 2000);
-            // We herladen loadSettings() even NIET om te zien of de 500 blijft staan
         } else {
             const errBody = await response.json();
-            console.error("API Rejected:", errBody);
             alert("Error: " + JSON.stringify(errBody.detail));
         }
     } catch (e) {
@@ -277,14 +285,16 @@ function updateCharts(dataDict, color, labelPrefix) {
 async function saveGlobalConfig() {
     const data = { 
         ha_base_url: document.getElementById('ha_url').value, 
-        ha_token: document.getElementById('ha_token').value 
+        ha_token: document.getElementById('ha_token').value,
+        latitude: parseFloat(document.getElementById('latitude').value),
+        longitude: parseFloat(document.getElementById('longitude').value)
     };
     await fetch('/api/config/save', { 
         method: 'POST', 
         headers: {'Content-Type': 'application/json'}, 
         body: JSON.stringify(data) 
     });
-    alert('Settings synced across all panels.');
+    alert('Settings & Location synced across all panels.');
     loadSettings();
 }
 

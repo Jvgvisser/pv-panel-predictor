@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
+import numpy as np
 import json
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -11,7 +12,8 @@ from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
 from backend.app.services.ha_stats_ws import HAStatsWSClient
 from backend.app.services.open_meteo_client import OpenMeteoClient
-from backend.app.services.ml import PanelModelService, add_time_features
+# Zorg dat add_solar_position ook wordt geïmporteerd uit ml.py
+from backend.app.services.ml import PanelModelService, add_time_features, add_solar_position
 
 app = FastAPI(title="PV Panel Predictor")
 
@@ -24,6 +26,8 @@ ms = PanelModelService()
 class GlobalConfig(BaseModel):
     ha_base_url: str
     ha_token: str
+    latitude: float
+    longitude: float
     evcc_url: str = ""
 
 # --- HELPER FUNCTIONS ---
@@ -77,9 +81,15 @@ async def perform_prediction(panel_id: str, days: int):
     
     df = meteo_fc.copy()
     df["time"] = pd.to_datetime(df.index, utc=True)
+    
+    # Voeg lags en tijd features toe (zoals in je ml.py verwacht)
     df["kwh_lag_24"] = 0.0 
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
+    
+    # 1. Tijd features (sin/cos)
     df = add_time_features(df, "time")
+    # 2. Zonnestand features (azimuth/elevation)
+    df = add_solar_position(df, panel.latitude, panel.longitude)
     
     pred = ms.predict(trained, df)
     return [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
@@ -94,9 +104,11 @@ def get_global_config():
         return {
             "ha_base_url": p.ha_base_url,
             "ha_token": p.ha_token,
+            "latitude": p.latitude,
+            "longitude": p.longitude,
             "evcc_url": "" 
         }
-    return {"ha_base_url": "", "ha_token": "", "evcc_url": ""}
+    return {"ha_base_url": "", "ha_token": "", "latitude": 52.3, "longitude": 4.9, "evcc_url": ""}
 
 @app.post("/api/config/save")
 async def save_global_config(config: GlobalConfig):
@@ -105,6 +117,8 @@ async def save_global_config(config: GlobalConfig):
         for p in panels:
             p.ha_base_url = config.ha_base_url
             p.ha_token = config.ha_token
+            p.latitude = config.latitude
+            p.longitude = config.longitude
             repo.upsert(p)
         return {"ok": True, "message": f"Global settings applied to {len(panels)} panels."}
     except Exception as e:
@@ -141,10 +155,16 @@ async def train_all_panels(days: int = 30):
             )
             energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
             meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
+            
+            # Combineer HA data met Weer data
             train_df = energy_df.join(meteo_df, how="inner").dropna()
             
             if len(train_df) >= 24:
+                # Features voorbereiden
                 train_df = add_time_features(train_df)
+                train_df = add_solar_position(train_df, p.latitude, p.longitude)
+                
+                # Model trainen
                 ms.train(p.panel_id, train_df)
                 results.append({"panel_id": p.panel_id, "status": "ok"})
             else:
@@ -170,22 +190,16 @@ async def train_panel(panel_id: str, days: int = 30):
             raise HTTPException(status_code=400, detail="Insufficient data.")
 
         train_df = add_time_features(train_df)
+        train_df = add_solar_position(train_df, panel.latitude, panel.longitude)
+        
         metrics = ms.train(panel_id, train_df)
         return {"ok": True, "metrics": metrics}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/panels/{panel_id}/predict")
-async def get_predict_panel(panel_id: str, days: int = 7):
-    try:
-        out = await perform_prediction(panel_id, days)
-        return {"ok": True, "panel_id": panel_id, "forecast": out}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/api/predict/total")
 async def get_total_prediction(days: int = 2):
-    """Voor evcc: uurbasis voorspelling."""
+    """Voor evcc en uurbasis grafieken."""
     panels = repo.list()
     total_forecast = {}
     for p in panels:
