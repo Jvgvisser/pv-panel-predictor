@@ -1,8 +1,10 @@
 from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
@@ -15,6 +17,15 @@ app = FastAPI(title="PV Panel Predictor")
 repo = PanelsRepo()
 meteo = OpenMeteoClient()
 ms = PanelModelService()
+
+# --- NIEUWE MODELLEN VOOR CONFIGURATIE ---
+
+class GlobalConfig(BaseModel):
+    ha_base_url: str
+    ha_token: str
+    evcc_url: str = ""
+
+# --- HELPER FUNCTIES ---
 
 async def _fetch_panel_kwh_stats(panel, days: int):
     """Fetch hourly kWh using HA long-term statistics via websocket."""
@@ -33,14 +44,8 @@ async def _fetch_panel_kwh_stats(panel, days: int):
         print("❌ DEBUG: Geen punten ontvangen van WebSocket.")
         return pd.DataFrame()
 
-    print(f"📊 DEBUG: {len(points)} rauwe punten ontvangen.")
     df = pd.DataFrame(points)
     
-    # Debug: wat krijgen we precies binnen?
-    print(f"🔍 DEBUG: Kolommen in data: {df.columns.tolist()}")
-    print(f"🔍 DEBUG: Eerste rij: {df.iloc[0].to_dict() if not df.empty else 'LEEG'}")
-
-    # Bepaal de kolom voor de waarde
     target_col = None
     for c in ["sum", "state", "mean"]:
         if c in df.columns and df[c].notna().any():
@@ -48,66 +53,92 @@ async def _fetch_panel_kwh_stats(panel, days: int):
             break
     
     if target_col is None:
-        print(f"❌ DEBUG: Geen bruikbare kolom gevonden in {df.columns.tolist()}")
         return pd.DataFrame()
 
-    print(f"✅ DEBUG: Gebruik kolom '{target_col}'")
-
-    # Tijdverwerking
-    # HA gebruikt 'start' (timestamp in ms of iso string)
     df["time"] = pd.to_datetime(df["start"], unit='ms', utc=True) if df["start"].dtype != object else pd.to_datetime(df["start"], utc=True)
     df["time"] = df["time"].dt.floor("h")
     
     df = df.set_index("time").sort_index()
     df = df[~df.index.duplicated(keep='first')]
     
-    # Bereken het verschil (kWh productie per uur)
     series = df[target_col].astype(float)
     hourly_diff = series.diff().clip(lower=0)
     
-    # Schaling van Wh naar kWh
-    result_df = (hourly_diff * 0.001).to_frame(name="kwh").dropna()
+    # Gebruik de scale factor uit de panel config
+    result_df = (hourly_diff * panel.scale_to_kwh).to_frame(name="kwh").dropna()
     
-    print(f"📈 DEBUG: Na verwerking {len(result_df)} rijen over.")
     return result_df
+
+# --- GLOBALE CONFIGURATIE ENDPOINTS ---
+
+@app.get("/api/config")
+def get_global_config():
+    """Haalt de HA instellingen op van het eerste paneel als referentie."""
+    panels = repo.list()
+    if panels:
+        p = panels[0]
+        return {
+            "ha_base_url": p.ha_base_url,
+            "ha_token": p.ha_token, # UI kan dit maskeren indien gewenst
+            "evcc_url": "" 
+        }
+    return {"ha_base_url": "", "ha_token": "", "evcc_url": ""}
+
+@app.post("/api/config/save")
+async def save_global_config(config: GlobalConfig):
+    """Update de HA gegevens voor ALLE panelen tegelijk."""
+    try:
+        panels = repo.list()
+        for p in panels:
+            p.ha_base_url = config.ha_base_url
+            p.ha_token = config.ha_token
+            repo.upsert(p)
+        return {"ok": True, "message": f"Settings updated for {len(panels)} panels."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- PANEL ENDPOINTS ---
+
+@app.get("/api/panels")
+def list_panels():
+    return repo.list()
+
+@app.post("/api/panels")
+def add_panel(panel: PanelConfig):
+    repo.upsert(panel)
+    return {"ok": True, "panel_id": panel.panel_id}
+
+@app.delete("/api/panels/{panel_id}")
+def delete_panel(panel_id: str):
+    repo.delete(panel_id)
+    return {"ok": True}
+
+# --- TRAINING & PREDICTION ---
 
 @app.post("/api/panels/{panel_id}/train")
 async def train_panel(panel_id: str, days: int = 30):
     try:
         print(f"Starting training for {panel_id}...")
         panel = repo.get(panel_id)
-
-        # 1. Haal energie data op
         energy_df = await _fetch_panel_kwh_stats(panel, days=days)
-        
-        # 2. Haal weer data op
         meteo_df = meteo.fetch_history_days(
             latitude=panel.latitude, longitude=panel.longitude,
             days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
         )
 
-        # 3. Data combineren
         energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
         meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
-        
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
-        print(f"🔗 Match: Hass({len(energy_df)}) + Weer({len(meteo_df)}) = Combine({len(train_df)})")
-
         if len(train_df) < 24:
-            print(f"❌ DEBUG: Hass range: {energy_df.index.min()} tot {energy_df.index.max()}")
-            print(f"❌ DEBUG: Weer range: {meteo_df.index.min()} tot {meteo_df.index.max()}")
-            raise HTTPException(status_code=400, detail=f"Te weinig overlap. Hass: {len(energy_df)}, Match: {len(train_df)}")
+            raise HTTPException(status_code=400, detail="Te weinig overlap in data.")
 
-        # 4. Training
         train_df = add_time_features(train_df)
         metrics = ms.train(panel_id, train_df)
-        
         return {"ok": True, "metrics": metrics, "rows": len(train_df)}
-
     except Exception as e:
         import traceback
-        print(f"‼️ CRASH:\n{traceback.format_exc()}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/panels/{panel_id}/predict")
@@ -130,19 +161,7 @@ def predict_panel(panel_id: str, days: int = 7):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/panels")
-def list_panels():
-    return repo.list()
-
-@app.post("/api/panels")
-def add_panel(panel: PanelConfig):
-    repo.upsert(panel)
-    return {"ok": True}
-
-@app.delete("/api/panels/{panel_id}")
-def delete_panel(panel_id: str):
-    repo.delete(panel_id)
-    return {"ok": True}
+# --- STATIC FILES ---
 
 static_path = Path("/opt/pv-panel-predictor/frontend")
 if static_path.exists():
