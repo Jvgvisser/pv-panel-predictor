@@ -5,6 +5,7 @@ import json
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import List
 
 from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
@@ -84,18 +85,13 @@ def get_global_config():
 
 @app.post("/api/config/save")
 async def save_global_config(config: GlobalConfig):
-    """Update HA credentials for ALL panels and force disk write."""
+    """Update HA credentials for ALL panels."""
     try:
         panels = repo.list()
         for p in panels:
             p.ha_base_url = config.ha_base_url
             p.ha_token = config.ha_token
             repo.upsert(p)
-        
-        # Explicit save to ensure panels.json is updated on disk
-        if hasattr(repo, '_save'):
-            repo._save()
-            
         return {"ok": True, "message": f"Global settings applied to {len(panels)} panels."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -108,12 +104,8 @@ def list_panels():
 
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
-    """Saves or updates a panel and forces a write to JSON."""
     try:
         repo.upsert(panel)
-        # Force writing to file immediately
-        if hasattr(repo, '_save'):
-            repo._save()
         return {"ok": True, "panel_id": panel.panel_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -121,8 +113,6 @@ def add_panel(panel: PanelConfig):
 @app.delete("/api/panels/{panel_id}")
 def delete_panel(panel_id: str):
     repo.delete(panel_id)
-    if hasattr(repo, '_save'):
-        repo._save()
     return {"ok": True}
 
 # --- TRAINING & PREDICTION ---
@@ -130,7 +120,6 @@ def delete_panel(panel_id: str):
 @app.post("/api/panels/{panel_id}/train")
 async def train_panel(panel_id: str, days: int = 30):
     try:
-        print(f"Starting training for {panel_id}...")
         panel = repo.get(panel_id)
         energy_df = await _fetch_panel_kwh_stats(panel, days=days)
         meteo_df = meteo.fetch_history_days(
@@ -143,18 +132,29 @@ async def train_panel(panel_id: str, days: int = 30):
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
         if len(train_df) < 24:
-            raise HTTPException(status_code=400, detail="Insufficient data overlap for training.")
+            raise HTTPException(status_code=400, detail="Insufficient data overlap.")
 
         train_df = add_time_features(train_df)
         metrics = ms.train(panel_id, train_df)
         return {"ok": True, "metrics": metrics, "rows": len(train_df)}
     except Exception as e:
-        import traceback
-        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/train/all")
+async def train_all_panels(days: int = 30):
+    """Hulpmiddel om alle panelen in één keer te trainen."""
+    panels = repo.list()
+    results = []
+    for p in panels:
+        try:
+            await train_panel(p.panel_id, days=days)
+            results.append({"panel_id": p.panel_id, "status": "ok"})
+        except Exception as e:
+            results.append({"panel_id": p.panel_id, "status": f"error: {str(e)}"})
+    return {"trained_count": len(panels), "details": results}
+
 @app.get("/api/panels/{panel_id}/predict")
-def predict_panel(panel_id: str, days: int = 7):
+async def predict_panel(panel_id: str, days: int = 7):
     try:
         panel = repo.get(panel_id)
         trained = ms.load(panel_id)
@@ -172,6 +172,29 @@ def predict_panel(panel_id: str, days: int = 7):
         return {"ok": True, "panel_id": panel_id, "forecast": out}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/predict/total")
+async def get_total_prediction(days: int = 2):
+    """Haalt de voorspelling op voor ALLE panelen en telt ze bij elkaar op."""
+    panels = repo.list()
+    total_forecast = {}
+
+    for p in panels:
+        try:
+            # We roepen de bestaande predict functie aan
+            res = await predict_panel(p.panel_id, days=days)
+            for entry in res["forecast"]:
+                t = entry["time"]
+                k = entry["kwh"]
+                total_forecast[t] = total_forecast.get(t, 0.0) + k
+        except Exception as e:
+            print(f"Skipping {p.panel_id}: {e}")
+
+    sorted_forecast = [
+        {"time": t, "kwh": round(total_forecast[t], 3)} 
+        for t in sorted(total_forecast.keys())
+    ]
+    return {"ok": True, "total_forecast": sorted_forecast}
 
 # --- STATIC FILES ---
 
