@@ -33,8 +33,6 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
     now_dt = datetime.now(timezone.utc)
     
-    print(f"🚀 DEBUG: Fetching data for {panel.entity_id} ({days} days)")
-    
     points = await ws.fetch_hourly_energy_kwh_from_stats(
         panel.entity_id, 
         days=days, 
@@ -42,7 +40,6 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     )
     
     if not points:
-        print("❌ DEBUG: No points received from WebSocket.")
         return pd.DataFrame()
 
     df = pd.DataFrame(points)
@@ -68,11 +65,29 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     result_df = (hourly_diff * panel.scale_to_kwh).to_frame(name="kwh").dropna()
     return result_df
 
+async def perform_prediction(panel_id: str, days: int):
+    """Internal function to handle prediction logic for one panel."""
+    panel = repo.get(panel_id)
+    trained = ms.load(panel_id)
+    
+    meteo_fc = meteo.fetch_hourly_forecast(
+        latitude=panel.latitude, longitude=panel.longitude,
+        days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
+    )
+    
+    df = meteo_fc.copy()
+    df["time"] = pd.to_datetime(df.index, utc=True)
+    df["kwh_lag_24"] = 0.0 
+    df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
+    df = add_time_features(df, "time")
+    
+    pred = ms.predict(trained, df)
+    return [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
+
 # --- GLOBAL CONFIGURATION ENDPOINTS ---
 
 @app.get("/api/config")
 def get_global_config():
-    """Fetches HA settings from the first panel as reference."""
     panels = repo.list()
     if panels:
         p = panels[0]
@@ -85,7 +100,6 @@ def get_global_config():
 
 @app.post("/api/config/save")
 async def save_global_config(config: GlobalConfig):
-    """Update HA credentials for ALL panels."""
     try:
         panels = repo.list()
         for p in panels:
@@ -104,11 +118,8 @@ def list_panels():
 
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
-    try:
-        repo.upsert(panel)
-        return {"ok": True, "panel_id": panel.panel_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    repo.upsert(panel)
+    return {"ok": True, "panel_id": panel.panel_id}
 
 @app.delete("/api/panels/{panel_id}")
 def delete_panel(panel_id: str):
@@ -116,6 +127,31 @@ def delete_panel(panel_id: str):
     return {"ok": True}
 
 # --- TRAINING & PREDICTION ---
+
+@app.post("/api/train/all")
+async def train_all_panels(days: int = 30):
+    panels = repo.list()
+    results = []
+    for p in panels:
+        try:
+            energy_df = await _fetch_panel_kwh_stats(p, days=days)
+            meteo_df = meteo.fetch_history_days(
+                latitude=p.latitude, longitude=p.longitude,
+                days=days, tilt_deg=p.tilt_deg, azimuth_deg=p.azimuth_deg,
+            )
+            energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
+            meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
+            train_df = energy_df.join(meteo_df, how="inner").dropna()
+            
+            if len(train_df) >= 24:
+                train_df = add_time_features(train_df)
+                ms.train(p.panel_id, train_df)
+                results.append({"panel_id": p.panel_id, "status": "ok"})
+            else:
+                results.append({"panel_id": p.panel_id, "status": "insufficient_data"})
+        except Exception as e:
+            results.append({"panel_id": p.panel_id, "status": f"error: {str(e)}"})
+    return {"trained_count": len(panels), "details": results}
 
 @app.post("/api/panels/{panel_id}/train")
 async def train_panel(panel_id: str, days: int = 30):
@@ -126,69 +162,42 @@ async def train_panel(panel_id: str, days: int = 30):
             latitude=panel.latitude, longitude=panel.longitude,
             days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
         )
-
         energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
         meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
         if len(train_df) < 24:
-            raise HTTPException(status_code=400, detail="Insufficient data overlap.")
+            raise HTTPException(status_code=400, detail="Insufficient data.")
 
         train_df = add_time_features(train_df)
         metrics = ms.train(panel_id, train_df)
-        return {"ok": True, "metrics": metrics, "rows": len(train_df)}
+        return {"ok": True, "metrics": metrics}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/train/all")
-async def train_all_panels(days: int = 30):
-    """Hulpmiddel om alle panelen in één keer te trainen."""
-    panels = repo.list()
-    results = []
-    for p in panels:
-        try:
-            await train_panel(p.panel_id, days=days)
-            results.append({"panel_id": p.panel_id, "status": "ok"})
-        except Exception as e:
-            results.append({"panel_id": p.panel_id, "status": f"error: {str(e)}"})
-    return {"trained_count": len(panels), "details": results}
-
 @app.get("/api/panels/{panel_id}/predict")
-async def predict_panel(panel_id: str, days: int = 7):
+async def get_predict_panel(panel_id: str, days: int = 7):
     try:
-        panel = repo.get(panel_id)
-        trained = ms.load(panel_id)
-        meteo_fc = meteo.fetch_hourly_forecast(
-            latitude=panel.latitude, longitude=panel.longitude,
-            days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
-        )
-        df = meteo_fc.copy()
-        df["time"] = pd.to_datetime(df.index, utc=True)
-        df["kwh_lag_24"] = 0.0 
-        df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
-        df = add_time_features(df, "time")
-        pred = ms.predict(trained, df)
-        out = [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
+        out = await perform_prediction(panel_id, days)
         return {"ok": True, "panel_id": panel_id, "forecast": out}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/predict/total")
 async def get_total_prediction(days: int = 2):
-    """Haalt de voorspelling op voor ALLE panelen en telt ze bij elkaar op."""
+    """Aggregates forecasts for all panels into one total."""
     panels = repo.list()
     total_forecast = {}
-
+    
     for p in panels:
         try:
-            # We roepen de bestaande predict functie aan
-            res = await predict_panel(p.panel_id, days=days)
-            for entry in res["forecast"]:
+            forecast = await perform_prediction(p.panel_id, days)
+            for entry in forecast:
                 t = entry["time"]
                 k = entry["kwh"]
                 total_forecast[t] = total_forecast.get(t, 0.0) + k
         except Exception as e:
-            print(f"Skipping {p.panel_id}: {e}")
+            print(f"Skipping {p.panel_id} in total: {e}")
 
     sorted_forecast = [
         {"time": t, "kwh": round(total_forecast[t], 3)} 
