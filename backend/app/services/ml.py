@@ -9,7 +9,7 @@ from pvlib.solarposition import get_solarposition
 import os
 
 def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
-    """Voegt cyclische tijdskenmerken toe voor betere AI patronen."""
+    """Voegt cyclische tijdskenmerken toe (sin/cos) voor uren en dagen."""
     out = df.copy()
 
     if time_col in out.columns:
@@ -31,7 +31,7 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     return out
 
 def add_solar_position(df: pd.DataFrame, lat: float, lon: float) -> pd.DataFrame:
-    """Berekent de exacte zonnestand (Azimuth/Elevation) voor schaduw-detectie."""
+    """Berekent Azimuth en Elevation voor schaduw-detectie."""
     out = df.copy()
     times = pd.to_datetime(out.index if isinstance(out.index, pd.DatetimeIndex) else out["time"], utc=True)
     
@@ -47,21 +47,27 @@ class TrainedModel:
 
 class PanelModelService:
     def __init__(self, base_dir: str = "/opt/pv-panel-predictor/models") -> None:
-        # We gebruiken nu een vast absoluut pad voor stabiliteit op de LXC
-        self.base_dir = Path(base_dir)
+        """
+        Initialiseert de service met een absoluut pad.
+        Standaard ingesteld op de productie-locatie op de LXC.
+        """
+        self.base_dir = Path(base_dir).resolve()
+        # Maak de map aan als deze nog niet bestaat
         self.base_dir.mkdir(parents=True, exist_ok=True)
+        print(f"--- PanelModelService: Modellen worden opgeslagen in: {self.base_dir} ---")
 
     def _get_model_path(self, panel_id: str) -> Path:
-        # GEFIXT: Slaat nu op als /models/panel_123.joblib (geen submappen meer)
+        """Genereert een plat pad: /pad/naar/models/panel_id.joblib"""
         return self.base_dir / f"{panel_id}.joblib"
 
     def train(self, panel_id: str, df: pd.DataFrame) -> dict:
-        """Traint een LightGBM model inclusief zonnestand en lags."""
+        """Traint een LightGBM model en slaat het op."""
         if df.empty:
-            raise ValueError("Training mislukt: De input dataframe is leeg.")
+            raise ValueError(f"Training mislukt voor {panel_id}: DataFrame is leeg.")
 
         df = df.copy()
 
+        # Feature Engineering: Lags
         if len(df) > 24:
             df["kwh_lag_24"] = df["kwh"].shift(24)
             df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24)
@@ -80,8 +86,9 @@ class PanelModelService:
                 df[col] = 0.0
 
         if len(df) < 24:
-            raise ValueError(f"Te weinig data na voorbereiding: {len(df)} rijen over.")
+            raise ValueError(f"Te weinig data na lag-creatie: {len(df)} rijen over.")
 
+        # Train/Val split
         val_n = min(168, max(24, int(len(df) * 0.15)))
         train_df = df.iloc[:-val_n]
         val_df = df.iloc[-val_n:]
@@ -101,22 +108,30 @@ class PanelModelService:
             eval_metric="rmse"
         )
         
-        # Gebruik de nieuwe platte pad-structuur
+        # Opslaan
         target_path = self._get_model_path(panel_id)
         joblib.dump({"model": model, "features": features}, target_path)
         
+        print(f"✅ Model succesvol getraind en opgeslagen: {target_path}")
+        
         return {"status": "trained", "path": str(target_path), "rows": len(df)}
 
-    def load(self, panel_id: str) -> TrainedModel:
+    def load(self, panel_id: str) -> TrainedModel | None:
+        """Laadt het model van schijf."""
         path = self._get_model_path(panel_id)
         if not path.exists():
-            # In plaats van een crash, geven we None terug zodat de API 404 kan geven
+            print(f"⚠️ Model niet gevonden voor {panel_id} op locatie: {path}")
             return None
         
-        obj = joblib.load(path)
-        return TrainedModel(model=obj["model"], features=obj["features"])
+        try:
+            obj = joblib.load(path)
+            return TrainedModel(model=obj["model"], features=obj["features"])
+        except Exception as e:
+            print(f"❌ Fout bij laden van model {panel_id}: {e}")
+            return None
 
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
+        """Voert de voorspelling uit en past nacht-correctie toe."""
         if trained is None:
             return np.array([])
             
@@ -128,6 +143,7 @@ class PanelModelService:
         pred = trained.model.predict(df[trained.features])
         pred = np.clip(pred, 0, None)
 
+        # Forceer 0 opbrengst als de zon onder is of er geen instraling is
         if "global_tilted_irradiance" in df.columns:
             pred = np.where(df["global_tilted_irradiance"] <= 0.5, 0.0, pred)
         if "elevation" in df.columns:
