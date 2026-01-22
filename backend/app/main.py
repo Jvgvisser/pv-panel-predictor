@@ -18,21 +18,21 @@ repo = PanelsRepo()
 meteo = OpenMeteoClient()
 ms = PanelModelService()
 
-# --- NIEUWE MODELLEN VOOR CONFIGURATIE ---
+# --- MODELS FOR CONFIGURATION ---
 
 class GlobalConfig(BaseModel):
     ha_base_url: str
     ha_token: str
     evcc_url: str = ""
 
-# --- HELPER FUNCTIES ---
+# --- HELPER FUNCTIONS ---
 
 async def _fetch_panel_kwh_stats(panel, days: int):
     """Fetch hourly kWh using HA long-term statistics via websocket."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
     now_dt = datetime.now(timezone.utc)
     
-    print(f"🚀 DEBUG: Start ophalen data voor {panel.entity_id} ({days} dagen)")
+    print(f"🚀 DEBUG: Fetching data for {panel.entity_id} ({days} days)")
     
     points = await ws.fetch_hourly_energy_kwh_from_stats(
         panel.entity_id, 
@@ -41,7 +41,7 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     )
     
     if not points:
-        print("❌ DEBUG: Geen punten ontvangen van WebSocket.")
+        print("❌ DEBUG: No points received from WebSocket.")
         return pd.DataFrame()
 
     df = pd.DataFrame(points)
@@ -64,36 +64,39 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     series = df[target_col].astype(float)
     hourly_diff = series.diff().clip(lower=0)
     
-    # Gebruik de scale factor uit de panel config
     result_df = (hourly_diff * panel.scale_to_kwh).to_frame(name="kwh").dropna()
-    
     return result_df
 
-# --- GLOBALE CONFIGURATIE ENDPOINTS ---
+# --- GLOBAL CONFIGURATION ENDPOINTS ---
 
 @app.get("/api/config")
 def get_global_config():
-    """Haalt de HA instellingen op van het eerste paneel als referentie."""
+    """Fetches HA settings from the first panel as reference."""
     panels = repo.list()
     if panels:
         p = panels[0]
         return {
             "ha_base_url": p.ha_base_url,
-            "ha_token": p.ha_token, # UI kan dit maskeren indien gewenst
+            "ha_token": p.ha_token,
             "evcc_url": "" 
         }
     return {"ha_base_url": "", "ha_token": "", "evcc_url": ""}
 
 @app.post("/api/config/save")
 async def save_global_config(config: GlobalConfig):
-    """Update de HA gegevens voor ALLE panelen tegelijk."""
+    """Update HA credentials for ALL panels and force disk write."""
     try:
         panels = repo.list()
         for p in panels:
             p.ha_base_url = config.ha_base_url
             p.ha_token = config.ha_token
             repo.upsert(p)
-        return {"ok": True, "message": f"Settings updated for {len(panels)} panels."}
+        
+        # Explicit save to ensure panels.json is updated on disk
+        if hasattr(repo, '_save'):
+            repo._save()
+            
+        return {"ok": True, "message": f"Global settings applied to {len(panels)} panels."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -105,12 +108,21 @@ def list_panels():
 
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
-    repo.upsert(panel)
-    return {"ok": True, "panel_id": panel.panel_id}
+    """Saves or updates a panel and forces a write to JSON."""
+    try:
+        repo.upsert(panel)
+        # Force writing to file immediately
+        if hasattr(repo, '_save'):
+            repo._save()
+        return {"ok": True, "panel_id": panel.panel_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/panels/{panel_id}")
 def delete_panel(panel_id: str):
     repo.delete(panel_id)
+    if hasattr(repo, '_save'):
+        repo._save()
     return {"ok": True}
 
 # --- TRAINING & PREDICTION ---
@@ -131,7 +143,7 @@ async def train_panel(panel_id: str, days: int = 30):
         train_df = energy_df.join(meteo_df, how="inner").dropna()
         
         if len(train_df) < 24:
-            raise HTTPException(status_code=400, detail="Te weinig overlap in data.")
+            raise HTTPException(status_code=400, detail="Insufficient data overlap for training.")
 
         train_df = add_time_features(train_df)
         metrics = ms.train(panel_id, train_df)
