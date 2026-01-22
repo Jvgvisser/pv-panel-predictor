@@ -10,26 +10,20 @@
         .container { max-width: 1300px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .card { border: 1px solid #eef0f2; padding: 20px; border-radius: 10px; margin-bottom: 25px; background: #fff; }
         .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-        
         .view-toggle button { background: #fff; border: 1px solid #d1d9e0; padding: 8px 16px; cursor: pointer; border-radius: 6px; font-weight: 600; transition: 0.2s; }
         .view-toggle button.active { background: #1a73e8; color: white; border-color: #1a73e8; }
-        
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
         th, td { padding: 12px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
         th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; }
-        
         input { padding: 8px; border: 1px solid #dadce0; border-radius: 4px; width: 100%; box-sizing: border-box; }
-        
         .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; }
         .btn-blue { background: #1a73e8; color: white; }
         .btn-green { background: #34a853; color: white; }
         .btn-orange { background: #fbbc05; color: white; }
         .btn-red { background: #ea4335; color: white; }
         .btn-black { background: #202124; color: white; }
-        
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .chart-container { height: 350px; position: relative; margin-bottom: 20px; }
-        
         #training-status { display: none; background: #e8f0fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #1a73e8; }
         .progress-bar { height: 10px; background: #ddd; border-radius: 5px; margin-top: 10px; overflow: hidden; }
         .progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: width 0.3s; }
@@ -158,48 +152,21 @@ async function loadSettings() {
 
 async function savePanel(id, btn) {
     const row = btn.parentElement.parentElement;
-    
-    const friendly_name = row.querySelector('.p-name').value;
-    const entity_id = row.querySelector('.p-entity').value;
-    const watt_peak = parseFloat(row.querySelector('.p-wp').value);
-    const tilt_deg = parseFloat(row.querySelector('.p-tilt').value);
-    const azimuth_deg = parseFloat(row.querySelector('.p-azi').value);
-
-    // Gebruik de coördinaten uit de globale velden
-    const lat = parseFloat(document.getElementById('latitude').value);
-    const lon = parseFloat(document.getElementById('longitude').value);
-
     const data = {
         "panel_id": id,
-        "friendly_name": friendly_name || "Panel " + id,
-        "entity_id": entity_id,
-        "tilt_deg": isNaN(tilt_deg) ? 35.0 : tilt_deg,
-        "azimuth_deg": isNaN(azimuth_deg) ? 0.0 : azimuth_deg,
-        "latitude": isNaN(lat) ? 52.3676 : lat, 
-        "longitude": isNaN(lon) ? 4.9041 : lon,
-        "ha_base_url": document.getElementById('ha_url').value || "",
-        "ha_token": document.getElementById('ha_token').value || "",
-        "watt_peak": isNaN(watt_peak) ? 400.0 : watt_peak,
+        "friendly_name": row.querySelector('.p-name').value || "Panel " + id,
+        "entity_id": row.querySelector('.p-entity').value,
+        "watt_peak": parseFloat(row.querySelector('.p-wp').value) || 400.0,
+        "tilt_deg": parseFloat(row.querySelector('.p-tilt').value) || 35.0,
+        "azimuth_deg": parseFloat(row.querySelector('.p-azi').value) || 0.0,
+        "latitude": parseFloat(document.getElementById('latitude').value), 
+        "longitude": parseFloat(document.getElementById('longitude').value),
+        "ha_base_url": document.getElementById('ha_url').value,
+        "ha_token": document.getElementById('ha_token').value,
         "scale_to_kwh": 0.001
     };
-
-    try {
-        const response = await fetch('/api/panels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        if (response.ok) {
-            btn.innerText = "✅";
-            setTimeout(() => { btn.innerText = "💾"; }, 2000);
-        } else {
-            const errBody = await response.json();
-            alert("Error: " + JSON.stringify(errBody.detail));
-        }
-    } catch (e) {
-        console.error("Connection failed", e);
-    }
+    const response = await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+    if(response.ok) { btn.innerText = "✅"; setTimeout(() => btn.innerText = "💾", 2000); }
 }
 
 async function trainAllPanels(days) {
@@ -207,18 +174,13 @@ async function trainAllPanels(days) {
     const statusDiv = document.getElementById('training-status');
     const msg = document.getElementById('training-msg');
     const fill = document.getElementById('progress-fill');
-    
     statusDiv.style.display = 'block';
     const panels = await fetch('/api/panels').then(r => r.json());
-    
     for(let i=0; i < panels.length; i++) {
-        const p = panels[i];
-        msg.innerText = `Training ${p.panel_id} (${p.friendly_name})... [${i+1}/${panels.length}]`;
         fill.style.width = ((i / panels.length) * 100) + "%";
-        await fetch(`/api/panels/${p.panel_id}/train?days=${days}`, {method: 'POST'});
+        msg.innerText = `Training ${panels[i].panel_id}... [${i+1}/${panels.length}]`;
+        await fetch(`/api/panels/${panels[i].panel_id}/train?days=${days}`, {method: 'POST'});
     }
-    
-    fill.style.width = "100%";
     msg.innerText = "Success! All models trained.";
     setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
     refreshData();
@@ -238,8 +200,11 @@ async function refreshData() {
         try {
             const res = await fetch(`/api/panels/${p.panel_id}/predict?days=7`);
             const data = await res.json();
-            data.forecast.forEach(pt => { combined[pt.time] = (combined[pt.time] || 0) + pt.kwh; });
-        } catch(e) {}
+            // FIX: data is een Array, geen object met .forecast
+            if(Array.isArray(data)) {
+                data.forEach(pt => { combined[pt.time] = (combined[pt.time] || 0) + pt.kwh; });
+            }
+        } catch(e) { console.error("Error loading panel data:", e); }
     }
     updateCharts(combined, "#1a73e8", "Total System");
 }
@@ -248,12 +213,16 @@ async function showSinglePanel(id) {
     const res = await fetch(`/api/panels/${id}/predict?days=7`);
     const data = await res.json();
     let single = {};
-    data.forecast.forEach(pt => { single[pt.time] = pt.kwh; });
-    updateCharts(single, "#fd7e14", `Panel ${id}`);
+    if(Array.isArray(data)) {
+        data.forEach(pt => { single[pt.time] = pt.kwh; });
+        updateCharts(single, "#fd7e14", `Panel ${id}`);
+    }
 }
 
 function updateCharts(dataDict, color, labelPrefix) {
     const allLabels = Object.keys(dataDict).sort();
+    if(allLabels.length === 0) return;
+
     const hourLabels = allLabels.slice(0, currentViewDays * 24);
     const hourValues = hourLabels.map(l => dataDict[l]);
     const hourTimeLabels = hourLabels.map(l => {
@@ -271,14 +240,14 @@ function updateCharts(dataDict, color, labelPrefix) {
     mainChart = new Chart(document.getElementById('mainChart'), {
         type: 'bar',
         data: { labels: hourTimeLabels, datasets: [{ label: labelPrefix + " (kWh/h)", data: hourValues, backgroundColor: color }] },
-        options: { responsive: true, maintainAspectRatio: false }
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
     });
 
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(document.getElementById('dailyChart'), {
         type: 'bar',
         data: { labels: Object.keys(dailyTotals), datasets: [{ label: labelPrefix + " (Daily Total kWh)", data: Object.values(dailyTotals), backgroundColor: color }] },
-        options: { responsive: true, maintainAspectRatio: false }
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
     });
 }
 
@@ -289,20 +258,13 @@ async function saveGlobalConfig() {
         latitude: parseFloat(document.getElementById('latitude').value),
         longitude: parseFloat(document.getElementById('longitude').value)
     };
-    await fetch('/api/config/save', { 
-        method: 'POST', 
-        headers: {'Content-Type': 'application/json'}, 
-        body: JSON.stringify(data) 
-    });
+    await fetch('/api/config/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
     alert('Settings & Location synced across all panels.');
     loadSettings();
 }
 
 async function deletePanel(id) {
-    if(confirm('Delete panel?')) { 
-        await fetch(`/api/panels/${id}`, { method: 'DELETE' }); 
-        loadSettings(); 
-    }
+    if(confirm('Delete panel?')) { await fetch(`/api/panels/${id}`, { method: 'DELETE' }); loadSettings(); }
 }
 
 function addNewPanelRow() {
@@ -311,14 +273,12 @@ function addNewPanelRow() {
     const row = body.insertRow();
     row.innerHTML = `
         <td><strong>${newId}</strong></td>
-        <td><input type="text" class="p-name" placeholder="Name"></td>
-        <td><input type="text" class="p-entity" placeholder="sensor.ha_entity"></td>
+        <td><input type="text" class="p-name"></td>
+        <td><input type="text" class="p-entity"></td>
         <td><input type="number" class="p-wp" value="400"></td>
         <td><input type="number" class="p-tilt" value="35"></td>
         <td><input type="number" class="p-azi" value="0"></td>
-        <td style="text-align: center;">
-            <button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button>
-        </td>`;
+        <td style="text-align: center;"><button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button></td>`;
 }
 
 init();
