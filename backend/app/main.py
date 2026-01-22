@@ -12,7 +12,6 @@ from backend.app.models.panel import PanelConfig
 from backend.app.storage.panels_repo import PanelsRepo
 from backend.app.services.ha_stats_ws import HAStatsWSClient
 from backend.app.services.open_meteo_client import OpenMeteoClient
-# Zorg dat add_solar_position ook wordt geïmporteerd uit ml.py
 from backend.app.services.ml import PanelModelService, add_time_features, add_solar_position
 
 app = FastAPI(title="PV Panel Predictor")
@@ -74,6 +73,11 @@ async def perform_prediction(panel_id: str, days: int):
     panel = repo.get(panel_id)
     trained = ms.load(panel_id)
     
+    if not trained:
+        # Als er geen model is, geven we een lege lijst of error, 
+        # zodat de UI weet dat er nog getraind moet worden.
+        return []
+
     meteo_fc = meteo.fetch_hourly_forecast(
         latitude=panel.latitude, longitude=panel.longitude,
         days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
@@ -82,13 +86,11 @@ async def perform_prediction(panel_id: str, days: int):
     df = meteo_fc.copy()
     df["time"] = pd.to_datetime(df.index, utc=True)
     
-    # Voeg lags en tijd features toe (zoals in je ml.py verwacht)
+    # Voeg lags en tijd features toe
     df["kwh_lag_24"] = 0.0 
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
     
-    # 1. Tijd features (sin/cos)
     df = add_time_features(df, "time")
-    # 2. Zonnestand features (azimuth/elevation)
     df = add_solar_position(df, panel.latitude, panel.longitude)
     
     pred = ms.predict(trained, df)
@@ -142,6 +144,15 @@ def delete_panel(panel_id: str):
 
 # --- TRAINING & PREDICTION ---
 
+@app.get("/api/panels/{panel_id}/predict")
+async def get_panel_prediction(panel_id: str, days: int = 7):
+    """Route die de UI aanroept voor de grafiek per paneel (Lost 404 op)."""
+    try:
+        forecast = await perform_prediction(panel_id, days)
+        return forecast
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/train/all")
 async def train_all_panels(days: int = 30):
     panels = repo.list()
@@ -156,15 +167,11 @@ async def train_all_panels(days: int = 30):
             energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
             meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
             
-            # Combineer HA data met Weer data
             train_df = energy_df.join(meteo_df, how="inner").dropna()
             
             if len(train_df) >= 24:
-                # Features voorbereiden
                 train_df = add_time_features(train_df)
                 train_df = add_solar_position(train_df, p.latitude, p.longitude)
-                
-                # Model trainen
                 ms.train(p.panel_id, train_df)
                 results.append({"panel_id": p.panel_id, "status": "ok"})
             else:
