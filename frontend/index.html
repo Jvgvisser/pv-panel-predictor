@@ -30,7 +30,6 @@
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .chart-container { height: 350px; position: relative; margin-bottom: 20px; }
         
-        /* Training Progress Styling */
         #training-status { display: none; background: #e8f0fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #1a73e8; }
         .progress-bar { height: 10px; background: #ddd; border-radius: 5px; margin-top: 10px; overflow: hidden; }
         .progress-fill { height: 100%; background: #1a73e8; width: 0%; transition: width 0.3s; }
@@ -93,11 +92,11 @@
         <div class="grid">
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">Home Assistant URL</label>
-                <input type="text" id="ha_url">
+                <input type="text" id="ha_url" placeholder="http://192.168.1.100:8123">
             </div>
             <div>
                 <label style="font-size: 0.8em; font-weight: bold;">HA Access Token</label>
-                <input type="password" id="ha_token">
+                <input type="password" id="ha_token" placeholder="Long-lived access token">
             </div>
         </div>
         <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Sync Settings to All Panels</button>
@@ -147,9 +146,45 @@ async function loadSettings() {
     });
 }
 
-async function trainAllPanels(days) {
-    if(!confirm(`Start training ALL panels for ${days} days? This will take a few minutes.`)) return;
+async function savePanel(id, btn) {
+    const row = btn.parentElement.parentElement;
     
+    const data = {
+        panel_id: id,
+        friendly_name: row.querySelector('.p-name').value,
+        entity_id: row.querySelector('.p-entity').value,
+        watt_peak: parseFloat(row.querySelector('.p-wp').value) || 400.0,
+        tilt_deg: parseFloat(row.querySelector('.p-tilt').value) || 35.0,
+        azimuth_deg: parseFloat(row.querySelector('.p-azi').value) || 0.0,
+        latitude: 52.13, 
+        longitude: 5.29,
+        ha_base_url: document.getElementById('ha_url').value,
+        ha_token: document.getElementById('ha_token').value,
+        scale_to_kwh: 0.001
+    };
+
+    try {
+        const response = await fetch('/api/panels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (response.ok) {
+            btn.innerText = "✅";
+            setTimeout(() => { btn.innerText = "💾"; }, 2000);
+            await loadSettings(); // Refresh to confirm data is stored
+        } else {
+            const err = await response.json();
+            alert("Error: " + JSON.stringify(err.detail));
+        }
+    } catch (error) {
+        alert("Failed to connect to backend.");
+    }
+}
+
+async function trainAllPanels(days) {
+    if(!confirm(`Start training ALL panels for ${days} days?`)) return;
     const statusDiv = document.getElementById('training-status');
     const msg = document.getElementById('training-msg');
     const fill = document.getElementById('progress-fill');
@@ -159,25 +194,21 @@ async function trainAllPanels(days) {
     
     for(let i=0; i < panels.length; i++) {
         const p = panels[i];
-        const progress = ((i / panels.length) * 100).toFixed(0);
-        msg.innerText = `Training ${p.panel_id} (${p.friendly_name || 'Panel'})... [${i+1}/${panels.length}]`;
-        fill.style.width = progress + "%";
-        
-        try {
-            await fetch(`/api/panels/${p.panel_id}/train?days=${days}`, {method: 'POST'});
-        } catch(e) { console.error("Error training " + p.panel_id); }
+        msg.innerText = `Training ${p.panel_id} (${p.friendly_name})... [${i+1}/${panels.length}]`;
+        fill.style.width = ((i / panels.length) * 100) + "%";
+        await fetch(`/api/panels/${p.panel_id}/train?days=${days}`, {method: 'POST'});
     }
     
     fill.style.width = "100%";
-    msg.innerText = "All models trained successfully!";
-    setTimeout(() => { statusDiv.style.display = 'none'; fill.style.width = "0%"; }, 5000);
+    msg.innerText = "Success! All models trained.";
+    setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
     refreshData();
 }
 
 async function trainPanel(id, days) {
-    alert(`Training ${id} for ${days} days started...`);
+    alert(`Training ${id}...`);
     await fetch(`/api/panels/${id}/train?days=${days}`, {method: 'POST'});
-    alert(`Training for ${id} finished.`);
+    alert(`Finished ${id}`);
     refreshData();
 }
 
@@ -204,8 +235,7 @@ async function showSinglePanel(id) {
 
 function updateCharts(dataDict, color, labelPrefix) {
     const allLabels = Object.keys(dataDict).sort();
-    const limit = currentViewDays * 24;
-    const hourLabels = allLabels.slice(0, limit);
+    const hourLabels = allLabels.slice(0, currentViewDays * 24);
     const hourValues = hourLabels.map(l => dataDict[l]);
     const hourTimeLabels = hourLabels.map(l => {
         const d = new Date(l);
@@ -228,70 +258,46 @@ function updateCharts(dataDict, color, labelPrefix) {
     if (dailyChart) dailyChart.destroy();
     dailyChart = new Chart(document.getElementById('dailyChart'), {
         type: 'bar',
-        data: { labels: Object.keys(dailyTotals), datasets: [{ label: labelPrefix + " (Daily kWh)", data: Object.values(dailyTotals), backgroundColor: color }] },
+        data: { labels: Object.keys(dailyTotals), datasets: [{ label: labelPrefix + " (Daily Total kWh)", data: Object.values(dailyTotals), backgroundColor: color }] },
         options: { responsive: true, maintainAspectRatio: false }
     });
 }
 
-async function savePanel(id, btn) {
-    const row = btn.parentElement.parentElement;
-    
-    // Verzamel alle data uit de rij
-    const data = {
-        panel_id: id,
-        friendly_name: row.querySelector('.p-name').value,
-        entity_id: row.querySelector('.p-entity').value,
-        watt_peak: parseFloat(row.querySelector('.p-wp').value) || 0,
-        tilt_deg: parseFloat(row.querySelector('.p-tilt').value) || 0,
-        azimuth_deg: parseFloat(row.querySelector('.p-azi').value) || 0,
-        latitude: 52.0116, // Je kunt deze ook uit een globaal veld halen
-        longitude: 4.3571,
-        ha_base_url: document.getElementById('ha_url').value,
-        ha_token: document.getElementById('ha_token').value,
-        scale_to_kwh: 0.001
-    };
-
-    try {
-        const response = await fetch('/api/panels', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-
-        if (response.ok) {
-            console.log(`Panel ${id} saved successfully`);
-            // Visuele feedback op de knop
-            const originalText = btn.innerText;
-            btn.innerText = "✅";
-            setTimeout(() => { btn.innerText = "💾"; }, 2000);
-            
-            // HERLAAD de instellingen om te bevestigen dat het op de server staat
-            await loadSettings(); 
-        } else {
-            alert("Failed to save panel settings.");
-        }
-    } catch (error) {
-        console.error("Save error:", error);
-        alert("Error connecting to server.");
-    }
-}
-
 async function saveGlobalConfig() {
-    const data = { ha_base_url: document.getElementById('ha_url').value, ha_token: document.getElementById('ha_token').value };
-    await fetch('/api/config/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-    alert('Settings synced to all 28 panels.');
+    const data = { 
+        ha_base_url: document.getElementById('ha_url').value, 
+        ha_token: document.getElementById('ha_token').value 
+    };
+    await fetch('/api/config/save', { 
+        method: 'POST', 
+        headers: {'Content-Type': 'application/json'}, 
+        body: JSON.stringify(data) 
+    });
+    alert('Settings synced across all panels.');
     loadSettings();
 }
 
 async function deletePanel(id) {
-    if(confirm('Delete?')) { await fetch(`/api/panels/${id}`, { method: 'DELETE' }); loadSettings(); }
+    if(confirm('Delete panel?')) { 
+        await fetch(`/api/panels/${id}`, { method: 'DELETE' }); 
+        loadSettings(); 
+    }
 }
 
 function addNewPanelRow() {
     const body = document.getElementById('panels-body');
     const newId = "p" + (body.rows.length + 1).toString().padStart(2, '0');
     const row = body.insertRow();
-    row.innerHTML = `<td><strong>${newId}</strong></td><td><input type="text" class="p-name"></td><td><input type="text" class="p-entity"></td><td><input type="number" class="p-wp" value="400"></td><td><input type="number" class="p-tilt" value="35"></td><td><input type="number" class="p-azi" value="0"></td><td><button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button></td>`;
+    row.innerHTML = `
+        <td><strong>${newId}</strong></td>
+        <td><input type="text" class="p-name" placeholder="Name"></td>
+        <td><input type="text" class="p-entity" placeholder="sensor.ha_entity"></td>
+        <td><input type="number" class="p-wp" value="400"></td>
+        <td><input type="number" class="p-tilt" value="35"></td>
+        <td><input type="number" class="p-azi" value="0"></td>
+        <td style="text-align: center;">
+            <button class="btn btn-green" onclick="savePanel('${newId}', this)">💾</button>
+        </td>`;
 }
 
 init();
