@@ -185,10 +185,9 @@ async def get_predict_panel(panel_id: str, days: int = 7):
 
 @app.get("/api/predict/total")
 async def get_total_prediction(days: int = 2):
-    """Aggregates forecasts for all panels into one total."""
+    """Voor evcc: uurbasis voorspelling."""
     panels = repo.list()
     total_forecast = {}
-    
     for p in panels:
         try:
             forecast = await perform_prediction(p.panel_id, days)
@@ -196,14 +195,21 @@ async def get_total_prediction(days: int = 2):
                 t = entry["time"]
                 k = entry["kwh"]
                 total_forecast[t] = total_forecast.get(t, 0.0) + k
-        except Exception as e:
-            print(f"Skipping {p.panel_id} in total: {e}")
+        except Exception:
+            continue
 
-    sorted_forecast = [
-        {"time": t, "kwh": round(total_forecast[t], 3)} 
-        for t in sorted(total_forecast.keys())
-    ]
-    return {"ok": True, "total_forecast": sorted_forecast}
+    return [{"time": t, "kwh": round(total_forecast[t], 3)} for t in sorted(total_forecast.keys())]
+
+@app.get("/api/predict/total/daily")
+async def get_total_prediction_daily(days: int = 7):
+    """Voor Home Assistant: dagtotalen."""
+    hourly_data = await get_total_prediction(days=days)
+    daily_data = {}
+    for entry in hourly_data:
+        day = entry["time"].split("T")[0]
+        daily_data[day] = daily_data.get(day, 0.0) + entry["kwh"]
+    
+    return [{"date": d, "kwh": round(k, 2)} for d in sorted(daily_data.keys())]
 
 # --- STATIC FILES ---
 
