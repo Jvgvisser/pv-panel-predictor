@@ -149,19 +149,28 @@ async function loadSettings() {
 async function savePanel(id, btn) {
     const row = btn.parentElement.parentElement;
     
+    // We halen de waarden op uit de velden
+    const friendly_name = row.querySelector('.p-name').value;
+    const entity_id = row.querySelector('.p-entity').value;
+    const watt_peak = parseFloat(row.querySelector('.p-wp').value);
+    const tilt_deg = parseFloat(row.querySelector('.p-tilt').value);
+    const azimuth_deg = parseFloat(row.querySelector('.p-azi').value);
+
     const data = {
-        panel_id: id,
-        friendly_name: row.querySelector('.p-name').value,
-        entity_id: row.querySelector('.p-entity').value,
-        watt_peak: parseFloat(row.querySelector('.p-wp').value) || 400.0,
-        tilt_deg: parseFloat(row.querySelector('.p-tilt').value) || 35.0,
-        azimuth_deg: parseFloat(row.querySelector('.p-azi').value) || 0.0,
-        latitude: 52.13, 
-        longitude: 5.29,
-        ha_base_url: document.getElementById('ha_url').value,
-        ha_token: document.getElementById('ha_token').value,
-        scale_to_kwh: 0.001
+        "panel_id": id,
+        "friendly_name": friendly_name || "Panel " + id,
+        "entity_id": entity_id,
+        "tilt_deg": isNaN(tilt_deg) ? 35.0 : tilt_deg,
+        "azimuth_deg": isNaN(azimuth_deg) ? 0.0 : azimuth_deg,
+        "latitude": 52.1326, 
+        "longitude": 5.2913,
+        "ha_base_url": document.getElementById('ha_url').value || "",
+        "ha_token": document.getElementById('ha_token').value || "",
+        "watt_peak": isNaN(watt_peak) ? 400.0 : watt_peak,
+        "scale_to_kwh": 0.001
     };
+
+    console.log("Pushing to API:", data);
 
     try {
         const response = await fetch('/api/panels', {
@@ -172,14 +181,16 @@ async function savePanel(id, btn) {
 
         if (response.ok) {
             btn.innerText = "✅";
+            console.log("Save successful");
             setTimeout(() => { btn.innerText = "💾"; }, 2000);
-            await loadSettings(); // Refresh to confirm data is stored
+            // We herladen loadSettings() even NIET om te zien of de 500 blijft staan
         } else {
-            const err = await response.json();
-            alert("Error: " + JSON.stringify(err.detail));
+            const errBody = await response.json();
+            console.error("API Rejected:", errBody);
+            alert("Error: " + JSON.stringify(errBody.detail));
         }
-    } catch (error) {
-        alert("Failed to connect to backend.");
+    } catch (e) {
+        console.error("Connection failed", e);
     }
 }
 
