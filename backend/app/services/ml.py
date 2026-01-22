@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMRegressor
 from pvlib.solarposition import get_solarposition
+import os
 
 def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     """Voegt cyclische tijdskenmerken toe voor betere AI patronen."""
@@ -22,7 +23,6 @@ def add_time_features(df: pd.DataFrame, time_col: str = "time") -> pd.DataFrame:
     else:
         raise ValueError("add_time_features: geen 'time' kolom of DatetimeIndex gevonden")
 
-    # Cyclische kenmerken: 23:00 en 00:00 liggen nu logisch naast elkaar
     out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24.0)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24.0)
     out["doy_sin"] = np.sin(2 * np.pi * out["doy"] / 365.25)
@@ -35,7 +35,6 @@ def add_solar_position(df: pd.DataFrame, lat: float, lon: float) -> pd.DataFrame
     out = df.copy()
     times = pd.to_datetime(out.index if isinstance(out.index, pd.DatetimeIndex) else out["time"], utc=True)
     
-    # pvlib berekening
     solpos = get_solarposition(times, lat, lon)
     out["azimuth"] = solpos["azimuth"].values
     out["elevation"] = solpos["elevation"].values
@@ -47,14 +46,14 @@ class TrainedModel:
     features: list
 
 class PanelModelService:
-    def __init__(self, base_dir: str = "data/models") -> None:
+    def __init__(self, base_dir: str = "/opt/pv-panel-predictor/models") -> None:
+        # We gebruiken nu een vast absoluut pad voor stabiliteit op de LXC
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def _panel_dir(self, panel_id: str) -> Path:
-        d = self.base_dir / panel_id
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+    def _get_model_path(self, panel_id: str) -> Path:
+        # GEFIXT: Slaat nu op als /models/panel_123.joblib (geen submappen meer)
+        return self.base_dir / f"{panel_id}.joblib"
 
     def train(self, panel_id: str, df: pd.DataFrame) -> dict:
         """Traint een LightGBM model inclusief zonnestand en lags."""
@@ -63,19 +62,17 @@ class PanelModelService:
 
         df = df.copy()
 
-        # Lags: Leer van de patronen van exact 24 uur geleden
         if len(df) > 24:
             df["kwh_lag_24"] = df["kwh"].shift(24)
             df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24)
         
         df = df.dropna()
 
-        # De ultieme feature-set voor schaduwpanelen
         features = [
             "global_tilted_irradiance", "shortwave_radiation", "cloud_cover",
             "temperature_2m", "kwh_lag_24", "gti_lag_24",
             "hour_sin", "hour_cos", "doy_sin", "doy_cos",
-            "azimuth", "elevation"  # De nieuwe schaduw-detectoren
+            "azimuth", "elevation"
         ]
 
         for col in features:
@@ -85,7 +82,6 @@ class PanelModelService:
         if len(df) < 24:
             raise ValueError(f"Te weinig data na voorbereiding: {len(df)} rijen over.")
 
-        # Validatie-set voor 'early stopping' om overfitting te voorkomen
         val_n = min(168, max(24, int(len(df) * 0.15)))
         train_df = df.iloc[:-val_n]
         val_df = df.iloc[-val_n:]
@@ -105,23 +101,26 @@ class PanelModelService:
             eval_metric="rmse"
         )
         
-        d = self._panel_dir(panel_id)
-        joblib.dump({"model": model, "features": features}, d / "model.joblib")
+        # Gebruik de nieuwe platte pad-structuur
+        target_path = self._get_model_path(panel_id)
+        joblib.dump({"model": model, "features": features}, target_path)
         
-        return {"status": "trained with solar position", "rows": len(df)}
+        return {"status": "trained", "path": str(target_path), "rows": len(df)}
 
     def load(self, panel_id: str) -> TrainedModel:
-        d = self._panel_dir(panel_id)
-        path = d / "model.joblib"
+        path = self._get_model_path(panel_id)
         if not path.exists():
-            raise FileNotFoundError(f"Geen getraind model gevonden voor {panel_id}")
+            # In plaats van een crash, geven we None terug zodat de API 404 kan geven
+            return None
+        
         obj = joblib.load(path)
         return TrainedModel(model=obj["model"], features=obj["features"])
 
     def predict(self, trained: TrainedModel, feature_df: pd.DataFrame) -> np.ndarray:
-        """Voorspelt opbrengst met gebruik van alle features."""
+        if trained is None:
+            return np.array([])
+            
         df = feature_df.copy()
-        
         for _col in trained.features:
             if _col not in df.columns:
                 df[_col] = 0.0
@@ -129,7 +128,6 @@ class PanelModelService:
         pred = trained.model.predict(df[trained.features])
         pred = np.clip(pred, 0, None)
 
-        # Nacht-check: Als de zon onder de horizon is of straling bijna 0
         if "global_tilted_irradiance" in df.columns:
             pred = np.where(df["global_tilted_irradiance"] <= 0.5, 0.0, pred)
         if "elevation" in df.columns:
