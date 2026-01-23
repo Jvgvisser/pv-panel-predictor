@@ -143,7 +143,26 @@ async def save_global_config(config: GlobalConfig):
 
 @app.get("/api/panels")
 def list_panels():
-    return repo.list()
+    panels = repo.list()
+    result = []
+    for p in panels:
+        # Check of de naam in de JSON staat, anders fallback naar serienummer
+        display_name = getattr(p, 'name', None)
+        
+        if not display_name or display_name == "Onbekend paneel":
+            eid = getattr(p, 'entity_id', '')
+            if "inverter_" in eid:
+                # Maakt van 'sensor.inverter_12345_...' -> '12345'
+                display_name = eid.split("inverter_")[1].split("_")[0]
+            else:
+                display_name = p.panel_id
+
+        result.append({
+            "panel_id": p.panel_id,
+            "name": display_name,
+            "entity_id": getattr(p, 'entity_id', '')
+        })
+    return result
 
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
