@@ -3,61 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Model Evaluatie - Vergelijking</title>
+    <title>Model Evaluatie - PV Predictor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background: #f4f4f9; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; }
-        .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; padding: 15px; background: #f8f9fa; border-radius: 6px; }
-        .train-section { margin-bottom: 20px; padding: 15px; border: 1px dashed #fb8c00; border-radius: 6px; background: #fff3e0; }
-        select, input, button { padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; }
-        button { background: #1a73e8; color: white; border: none; cursor: pointer; font-weight: bold; }
-        button:hover { background: #1557b0; }
-        button.secondary { background: #fb8c00; }
-        button.secondary:hover { background: #ef6c00; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        #stats { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .stat-card { padding: 15px; border-radius: 6px; background: #f8f9fa; border-left: 5px solid #1a73e8; }
-        .stat-card.xgb { border-left-color: #ea4335; }
-        #loadingOverlay { display: none; color: #ef6c00; font-weight: bold; margin-left: 10px; }
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 20px; background: #f4f7f9; color: #333; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        h1 { font-weight: 300; color: #1a1a1a; margin-bottom: 30px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        
+        .train-section { margin-bottom: 25px; padding: 15px 20px; background: #fff9f0; border: 1px solid #ffe0b2; border-radius: 10px; display: flex; align-items: center; justify-content: space-between; }
+        .controls { display: flex; gap: 20px; align-items: flex-end; margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 10px; }
+        
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 0.85rem; font-weight: 600; color: #666; }
+        
+        select, input, button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; outline: none; }
+        select:focus, input:focus { border-color: #03a9f4; }
+        
+        button { background: #1a1a1a; color: white; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+        button:hover { background: #333; transform: translateY(-1px); }
+        button.secondary { background: #ff3d00; }
+        button.secondary:hover { background: #e63600; }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+
+        #chartWrapper { position: relative; height: 500px; width: 100%; margin-bottom: 30px; }
+        
+        #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+        .stat-card { padding: 20px; border-radius: 12px; background: white; border: 1px solid #edf2f7; position: relative; overflow: hidden; }
+        .stat-card h3 { margin: 0 0 10px 0; font-size: 0.9rem; color: #718096; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card p { font-size: 1.8rem; font-weight: 700; margin: 0; color: #2d3748; }
+        
+        .indicator { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+        .lgb-ind { background: #03a9f4; }
+        .xgb-ind { background: #ff3d00; }
+
+        #loadingOverlay { display: none; margin-right: 15px; font-size: 0.9rem; color: #ff3d00; font-weight: 600; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>Model Evaluatie & Analyse</h1>
+    <h1>Model Analyse & Vergelijking</h1>
 
     <div class="train-section">
-        <strong>Batch Training:</strong>
-        <button class="secondary" id="trainBtn" onclick="trainAll(365)">🚀 Hertrain ALLES (365 dagen)</button>
-        <span id="loadingOverlay">⏳ Bezig met trainen van alle panelen (LGBM + XGB)...</span>
+        <div>
+            <strong>Batch Training:</strong> 
+            <span style="color: #7f8c8d; font-size: 0.9rem; margin-left: 10px;">Update alle modellen met 1 jaar data voor maximale precisie.</span>
+        </div>
+        <div>
+            <span id="loadingOverlay">⚡ Modellen worden getraind...</span>
+            <button class="secondary" id="trainBtn" onclick="trainAll(365)">🚀 Start 365d Training</button>
+        </div>
     </div>
     
     <div class="controls">
-        <div>
-            <label for="panelSelect">Paneel:</label>
+        <div class="control-group" style="flex-grow: 1;">
+            <label>Zonnepaneel</label>
             <select id="panelSelect"></select>
         </div>
         
-        <div>
-            <label for="daysInput">Kijkperiode (dagen):</label>
-            <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 50px;">
+        <div class="control-group">
+            <label>Evaluatieperiode (dagen)</label>
+            <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 80px;">
         </div>
         
-        <button onclick="loadEvaluation()">Update Grafiek</button>
+        <button onclick="loadEvaluation()">🔄 Ververs Analyse</button>
     </div>
 
-    <canvas id="evalChart"></canvas>
+    <div id="chartWrapper">
+        <canvas id="evalChart"></canvas>
+    </div>
 
     <div id="stats">
-        <div id="statsLgb" class="stat-card">
-            <h3>LightGBM Prestaties</h3>
-            <p id="maeLgb">MAE: -- kWh</p>
+        <div class="stat-card">
+            <div class="indicator lgb-ind"></div>
+            <h3>LightGBM Error (MAE)</h3>
+            <p id="maeLgb">--</p>
         </div>
-        <div id="statsXgb" class="stat-card xgb">
-            <h3>XGBoost Prestaties</h3>
-            <p id="maeXgb">MAE: -- kWh</p>
+        <div class="stat-card">
+            <div class="indicator xgb-ind"></div>
+            <h3>XGBoost Error (MAE)</h3>
+            <p id="maeXgb">--</p>
         </div>
     </div>
 </div>
@@ -70,34 +95,32 @@
             const res = await fetch('/api/panels');
             const panels = await res.json();
             const select = document.getElementById('panelSelect');
+            
             panels.forEach(p => {
                 const opt = document.createElement('option');
                 opt.value = p.panel_id;
-                opt.textContent = p.name || p.panel_id;
+                // Gebruik friendly name als deze bestaat, anders ID
+                const name = p.name || "Onbekend paneel";
+                opt.textContent = `${name} (${p.panel_id})`;
                 select.appendChild(opt);
             });
-            loadEvaluation();
+            if (panels.length > 0) loadEvaluation();
         } catch (e) { console.error("Fout bij laden panels:", e); }
     }
 
     async function trainAll(days) {
-        if (!confirm(`Weet je zeker dat je alle panelen wilt hertrainen met ${days} dagen data? Dit kan even duren.`)) return;
-        
+        if (!confirm(`Batch training starten voor alle panelen over ${days} dagen? Dit vergt veel rekenkracht.`)) return;
         const btn = document.getElementById('trainBtn');
         const loader = document.getElementById('loadingOverlay');
-        
         btn.disabled = true;
         loader.style.display = 'inline';
 
         try {
-            // We roepen je api/train/all endpoint aan die we in main.py hebben geüpdatet
-            const res = await fetch(`/api/train/all?days=${days}`, { method: 'POST' });
-            const result = await res.json();
-            alert("Training voltooid voor alle panelen!");
-            loadEvaluation(); // Ververs de grafiek direct
+            await fetch(`/api/train/all?days=${days}`, { method: 'POST' });
+            alert("Training voltooid. De grafiek wordt bijgewerkt.");
+            loadEvaluation();
         } catch (e) {
-            alert("Er ging iets mis tijdens het trainen.");
-            console.error(e);
+            alert("Er is een fout opgetreden tijdens de training.");
         } finally {
             btn.disabled = false;
             loader.style.display = 'none';
@@ -107,77 +130,108 @@
     async function loadEvaluation() {
         const panelId = document.getElementById('panelSelect').value;
         if (!panelId) return;
-
         const days = document.getElementById('daysInput').value;
         
-        const res = await fetch(`/api/panels/${panelId}/evaluate?days=${days}`);
-        const data = await res.json();
+        try {
+            const res = await fetch(`/api/panels/${panelId}/evaluate?days=${days}`);
+            const data = await res.json();
 
-        const labels = data.map(d => {
-            const date = new Date(d.time);
-            return date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit' });
-        });
+            const labels = data.map(d => {
+                const date = new Date(d.time);
+                return date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit' }) + 'u';
+            });
 
-        const actuals = data.map(d => d.actual);
-        const lgbPreds = data.map(d => d.lgb);
-        const xgbPreds = data.map(d => d.xgb);
+            const actuals = data.map(d => d.actual);
+            const lgbPreds = data.map(d => d.lgb);
+            const xgbPreds = data.map(d => d.xgb);
 
-        // Bereken MAE
-        const maeLgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - lgbPreds[i]), 0) / data.length).toFixed(4);
-        const maeXgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - xgbPreds[i]), 0) / data.length).toFixed(4);
+            // Bereken Mean Absolute Error
+            const maeLgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - lgbPreds[i]), 0) / data.length).toFixed(4);
+            const maeXgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - xgbPreds[i]), 0) / data.length).toFixed(4);
 
-        document.getElementById('maeLgb').textContent = `MAE (Gem. fout): ${maeLgb} kWh`;
-        document.getElementById('maeXgb').textContent = `MAE (Gem. fout): ${maeXgb} kWh`;
+            document.getElementById('maeLgb').textContent = `${maeLgb} kWh`;
+            document.getElementById('maeXgb').textContent = `${maeXgb} kWh`;
 
-        if (chart) chart.destroy();
+            if (chart) chart.destroy();
 
-        const ctx = document.getElementById('evalChart').getContext('2d');
-        chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [
-                    {
-                        label: 'Werkelijk (HA)',
-                        data: actuals,
-                        borderColor: '#34a853',
-                        backgroundColor: 'rgba(52, 168, 83, 0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 0
-                    },
-                    {
-                        label: 'LightGBM (LGB)',
-                        data: lgbPreds,
-                        borderColor: '#1a73e8',
-                        borderDash: [5, 5],
-                        fill: false,
-                        tension: 0.3,
-                        pointRadius: 0
-                    },
-                    {
-                        label: 'XGBoost (XGB)',
-                        data: xgbPreds,
-                        borderColor: '#ea4335',
-                        borderDash: [2, 2],
-                        fill: false,
-                        tension: 0.3,
-                        pointRadius: 0
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'kWh' } }
+            const ctx = document.getElementById('evalChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Werkelijk',
+                            data: actuals,
+                            borderColor: '#2c3e50', // Donker antraciet voor werkelijke data
+                            backgroundColor: 'rgba(44, 62, 80, 0.03)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 0,
+                            borderWidth: 1.2
+                        },
+                        {
+                            label: 'LightGBM',
+                            data: lgbPreds,
+                            borderColor: '#03a9f4', // Helder blauw
+                            borderDash: [5, 5],
+                            fill: false,
+                            tension: 0.4,
+                            pointRadius: 0,
+                            borderWidth: 1
+                        },
+                        {
+                            label: 'XGBoost',
+                            data: xgbPreds,
+                            borderColor: '#ff3d00', // Fel rood/oranje voor maximaal contrast
+                            borderDash: [2, 2],
+                            fill: false,
+                            tension: 0.4,
+                            pointRadius: 0,
+                            borderWidth: 1
+                        }
+                    ]
                 },
-                interaction: { mode: 'index', intersect: false }
-            }
-        });
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            grid: { color: '#f0f0f0', borderDash: [3, 3] },
+                            title: { display: true, text: 'kWh / uur', font: { weight: 'bold' } }
+                        },
+                        x: { 
+                            grid: { display: false },
+                            ticks: { maxTicksLimit: 15, font: { size: 11 } }
+                        }
+                    },
+                    plugins: {
+                        legend: { 
+                            position: 'top', 
+                            align: 'end',
+                            labels: { usePointStyle: true, boxWidth: 6, padding: 20, font: { size: 12 } } 
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            titleColor: '#1a1a1a',
+                            bodyColor: '#1a1a1a',
+                            borderColor: '#ddd',
+                            borderWidth: 1,
+                            padding: 12,
+                            boxPadding: 6,
+                            usePointStyle: true
+                        }
+                    }
+                }
+            });
+        } catch (e) {
+            console.error("Fout bij laden evaluatie:", e);
+        }
     }
-
+    
     init();
 </script>
-
 </body>
 </html>
