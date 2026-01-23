@@ -148,21 +148,24 @@ def list_panels():
     for p in panels:
         p_dict = p.__dict__.copy()
         
-        # Pak de naam uit de database
-        db_name = p_dict.get('name')
+        # We kijken eerst of er iets in 'friendly_name' staat
+        # Daarna pas in 'name', en anders gebruiken we de panel_id
+        display_name = p_dict.get('friendly_name') or p_dict.get('name')
         
-        # Alleen als de naam écht leeg is, None is, of de standaardwaarde heeft,
-        # vullen we het serienummer in.
-        if not db_name or db_name.strip() in ["", "Onbekend paneel", "None"]:
+        # Fallback als beide leeg zijn of de standaardwaarde hebben
+        if not display_name or str(display_name).strip() in ["", "Onbekend paneel", "None"]:
             eid = p_dict.get('entity_id', '')
             if "inverter_" in eid:
-                p_dict['name'] = eid.split("inverter_")[1].split("_")[0]
+                display_name = eid.split("inverter_")[1].split("_")[0]
             else:
-                p_dict['name'] = p.panel_id
-        
+                display_name = p_dict.get('panel_id')
+
+        # We zorgen dat de UI altijd 'name' gebruikt als weergaveveld
+        p_dict['name'] = display_name
         result.append(p_dict)
+        
     return result
-    
+
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
     repo.upsert(panel)
