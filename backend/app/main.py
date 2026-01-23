@@ -146,22 +146,22 @@ def list_panels():
     panels = repo.list()
     result = []
     for p in panels:
-        # Check of de naam in de JSON staat, anders fallback naar serienummer
-        display_name = getattr(p, 'name', None)
+        # We zetten het object om naar een dictionary zodat we alle velden hebben
+        p_dict = p.__dict__.copy()
         
+        # Als er geen naam is, maken we een mooie fallback
+        display_name = p_dict.get('name')
         if not display_name or display_name == "Onbekend paneel":
-            eid = getattr(p, 'entity_id', '')
+            eid = p_dict.get('entity_id', '')
             if "inverter_" in eid:
-                # Maakt van 'sensor.inverter_12345_...' -> '12345'
                 display_name = eid.split("inverter_")[1].split("_")[0]
             else:
                 display_name = p.panel_id
-
-        result.append({
-            "panel_id": p.panel_id,
-            "name": display_name,
-            "entity_id": getattr(p, 'entity_id', '')
-        })
+        
+        # Update de naam in de dictionary voor de UI
+        p_dict['name'] = display_name
+        result.append(p_dict)
+        
     return result
 
 @app.post("/api/panels")
