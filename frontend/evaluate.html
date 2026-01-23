@@ -1,69 +1,183 @@
 <!DOCTYPE html>
-<html>
+<html lang="nl">
 <head>
-    <title>Model Evaluator</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Evaluatie - Vergelijking</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
-        .chart-container { height: 500px; }
+        body { font-family: sans-serif; margin: 20px; background: #f4f4f9; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        .controls { margin-bottom: 20px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; padding: 15px; background: #f8f9fa; border-radius: 6px; }
+        .train-section { margin-bottom: 20px; padding: 15px; border: 1px dashed #fb8c00; border-radius: 6px; background: #fff3e0; }
+        select, input, button { padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; }
+        button { background: #1a73e8; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #1557b0; }
+        button.secondary { background: #fb8c00; }
+        button.secondary:hover { background: #ef6c00; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #stats { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .stat-card { padding: 15px; border-radius: 6px; background: #f8f9fa; border-left: 5px solid #1a73e8; }
+        .stat-card.xgb { border-left-color: #ea4335; }
+        #loadingOverlay { display: none; color: #ef6c00; font-weight: bold; margin-left: 10px; }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1>Model Accuracy Evaluator</h1>
-        <div class="controls">
+
+<div class="container">
+    <h1>Model Evaluatie & Analyse</h1>
+
+    <div class="train-section">
+        <strong>Batch Training:</strong>
+        <button class="secondary" id="trainBtn" onclick="trainAll(365)">🚀 Hertrain ALLES (365 dagen)</button>
+        <span id="loadingOverlay">⏳ Bezig met trainen van alle panelen (LGBM + XGB)...</span>
+    </div>
+    
+    <div class="controls">
+        <div>
+            <label for="panelSelect">Paneel:</label>
             <select id="panelSelect"></select>
-            <button onclick="runEvaluation()">Analyze Last 7 Days</button>
-            <div id="metrics"></div>
         </div>
-        <div class="chart-container">
-            <canvas id="evalChart"></canvas>
+        
+        <div>
+            <label for="daysInput">Kijkperiode (dagen):</label>
+            <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 50px;">
         </div>
+        
+        <button onclick="loadEvaluation()">Update Grafiek</button>
     </div>
 
+    <canvas id="evalChart"></canvas>
+
+    <div id="stats">
+        <div id="statsLgb" class="stat-card">
+            <h3>LightGBM Prestaties</h3>
+            <p id="maeLgb">MAE: -- kWh</p>
+        </div>
+        <div id="statsXgb" class="stat-card xgb">
+            <h3>XGBoost Prestaties</h3>
+            <p id="maeXgb">MAE: -- kWh</p>
+        </div>
+    </div>
+</div>
+
 <script>
-let evalChart;
+    let chart;
 
-async function loadPanels() {
-    const panels = await fetch('/api/panels').then(r => r.json());
-    const select = document.getElementById('panelSelect');
-    panels.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.panel_id;
-        opt.textContent = p.friendly_name || p.panel_id;
-        select.appendChild(opt);
-    });
-}
+    async function init() {
+        try {
+            const res = await fetch('/api/panels');
+            const panels = await res.json();
+            const select = document.getElementById('panelSelect');
+            panels.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.panel_id;
+                opt.textContent = p.name || p.panel_id;
+                select.appendChild(opt);
+            });
+            loadEvaluation();
+        } catch (e) { console.error("Fout bij laden panels:", e); }
+    }
 
-async function runEvaluation() {
-    const panelId = document.getElementById('panelSelect').value;
-    const data = await fetch(`/api/panels/${panelId}/evaluate?days=7`).then(r => r.json());
-    
-    const labels = data.map(d => new Date(d.time).toLocaleString());
-    const actuals = data.map(d => d.actual);
-    const preds = data.map(d => d.predicted);
+    async function trainAll(days) {
+        if (!confirm(`Weet je zeker dat je alle panelen wilt hertrainen met ${days} dagen data? Dit kan even duren.`)) return;
+        
+        const btn = document.getElementById('trainBtn');
+        const loader = document.getElementById('loadingOverlay');
+        
+        btn.disabled = true;
+        loader.style.display = 'inline';
 
-    // Bereken simpele foutmarge (MAE)
-    const mae = data.reduce((acc, curr) => acc + Math.abs(curr.error), 0) / data.length;
-    document.getElementById('metrics').innerHTML = `<strong>Mean Absolute Error:</strong> ${mae.toFixed(3)} kWh`;
+        try {
+            // We roepen je api/train/all endpoint aan die we in main.py hebben geüpdatet
+            const res = await fetch(`/api/train/all?days=${days}`, { method: 'POST' });
+            const result = await res.json();
+            alert("Training voltooid voor alle panelen!");
+            loadEvaluation(); // Ververs de grafiek direct
+        } catch (e) {
+            alert("Er ging iets mis tijdens het trainen.");
+            console.error(e);
+        } finally {
+            btn.disabled = false;
+            loader.style.display = 'none';
+        }
+    }
 
-    if (evalChart) evalChart.destroy();
-    evalChart = new Chart(document.getElementById('evalChart'), {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [
-                { label: 'Actual (HA)', data: actuals, borderColor: '#34a853', fill: false, tension: 0.3 },
-                { label: 'Predicted (ML)', data: preds, borderColor: '#1a73e8', borderDash: [5, 5], fill: false, tension: 0.3 }
-            ]
-        },
-        options: { responsive: true, maintainAspectRatio: false }
-    });
-}
+    async function loadEvaluation() {
+        const panelId = document.getElementById('panelSelect').value;
+        if (!panelId) return;
 
-loadPanels();
+        const days = document.getElementById('daysInput').value;
+        
+        const res = await fetch(`/api/panels/${panelId}/evaluate?days=${days}`);
+        const data = await res.json();
+
+        const labels = data.map(d => {
+            const date = new Date(d.time);
+            return date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit' });
+        });
+
+        const actuals = data.map(d => d.actual);
+        const lgbPreds = data.map(d => d.lgb);
+        const xgbPreds = data.map(d => d.xgb);
+
+        // Bereken MAE
+        const maeLgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - lgbPreds[i]), 0) / data.length).toFixed(4);
+        const maeXgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - xgbPreds[i]), 0) / data.length).toFixed(4);
+
+        document.getElementById('maeLgb').textContent = `MAE (Gem. fout): ${maeLgb} kWh`;
+        document.getElementById('maeXgb').textContent = `MAE (Gem. fout): ${maeXgb} kWh`;
+
+        if (chart) chart.destroy();
+
+        const ctx = document.getElementById('evalChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Werkelijk (HA)',
+                        data: actuals,
+                        borderColor: '#34a853',
+                        backgroundColor: 'rgba(52, 168, 83, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'LightGBM (LGB)',
+                        data: lgbPreds,
+                        borderColor: '#1a73e8',
+                        borderDash: [5, 5],
+                        fill: false,
+                        tension: 0.3,
+                        pointRadius: 0
+                    },
+                    {
+                        label: 'XGBoost (XGB)',
+                        data: xgbPreds,
+                        borderColor: '#ea4335',
+                        borderDash: [2, 2],
+                        fill: false,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'kWh' } }
+                },
+                interaction: { mode: 'index', intersect: false }
+            }
+        });
+    }
+
+    init();
 </script>
+
 </body>
 </html>

@@ -31,8 +31,25 @@ class GlobalConfig(BaseModel):
 
 # --- HELPER FUNCTIONS ---
 
+def prepare_features_for_model(df_in, panel):
+    """
+    Centrale functie voor feature engineering.
+    Zorgt dat training, predictie en evaluatie exact dezelfde kolommen gebruiken.
+    """
+    df = df_in.copy()
+    if "time" not in df.columns:
+        df["time"] = pd.to_datetime(df.index, utc=True)
+    
+    # Voeg lags en tijd features toe
+    df["kwh_lag_24"] = 0.0 
+    df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
+    
+    df = add_time_features(df, "time")
+    df = add_solar_position(df, panel.latitude, panel.longitude)
+    return df
+
 async def _fetch_panel_kwh_stats(panel, days: int):
-    """Fetch hourly kWh using HA long-term statistics via websocket."""
+    """Haalt de werkelijke kWh opbrengst uit Home Assistant Statistics."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
     now_dt = datetime.now(timezone.utc)
     
@@ -47,6 +64,7 @@ async def _fetch_panel_kwh_stats(panel, days: int):
 
     df = pd.DataFrame(points)
     
+    # Zoek naar de juiste kolom in de HA stats
     target_col = None
     for c in ["sum", "state", "mean"]:
         if c in df.columns and df[c].notna().any():
@@ -56,12 +74,14 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     if target_col is None:
         return pd.DataFrame()
 
+    # Tijd converteren en indexeren
     df["time"] = pd.to_datetime(df["start"], unit='ms', utc=True) if df["start"].dtype != object else pd.to_datetime(df["start"], utc=True)
     df["time"] = df["time"].dt.floor("h")
     
     df = df.set_index("time").sort_index()
     df = df[~df.index.duplicated(keep='first')]
     
+    # Bereken verschil per uur (kWh per uur)
     series = df[target_col].astype(float)
     hourly_diff = series.diff().clip(lower=0)
     
@@ -69,34 +89,27 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     return result_df
 
 async def perform_prediction(panel_id: str, days: int):
-    """Internal function to handle prediction logic for one panel."""
+    """Voert de live voorspelling uit (gebruikt altijd het hoofdmodel)."""
     panel = repo.get(panel_id)
     trained = ms.load(panel_id)
     
     if not trained:
-        # Als er geen model is, geven we een lege lijst of error, 
-        # zodat de UI weet dat er nog getraind moet worden.
         return []
 
     meteo_fc = meteo.fetch_hourly_forecast(
-        latitude=panel.latitude, longitude=panel.longitude,
-        days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
+        latitude=panel.latitude, 
+        longitude=panel.longitude,
+        days=days, 
+        tilt_deg=panel.tilt_deg, 
+        azimuth_deg=panel.azimuth_deg
     )
     
-    df = meteo_fc.copy()
-    df["time"] = pd.to_datetime(df.index, utc=True)
-    
-    # Voeg lags en tijd features toe
-    df["kwh_lag_24"] = 0.0 
-    df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
-    
-    df = add_time_features(df, "time")
-    df = add_solar_position(df, panel.latitude, panel.longitude)
-    
+    df = prepare_features_for_model(meteo_fc, panel)
     pred = ms.predict(trained, df)
+    
     return [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
 
-# --- GLOBAL CONFIGURATION ENDPOINTS ---
+# --- GLOBAL CONFIGURATION ---
 
 @app.get("/api/config")
 def get_global_config():
@@ -122,11 +135,11 @@ async def save_global_config(config: GlobalConfig):
             p.latitude = config.latitude
             p.longitude = config.longitude
             repo.upsert(p)
-        return {"ok": True, "message": f"Global settings applied to {len(panels)} panels."}
+        return {"ok": True, "message": "Instellingen opgeslagen voor alle panelen."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- PANEL ENDPOINTS ---
+# --- PANEL MANAGEMENT ---
 
 @app.get("/api/panels")
 def list_panels():
@@ -135,21 +148,51 @@ def list_panels():
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
     repo.upsert(panel)
-    return {"ok": True, "panel_id": panel.panel_id}
+    return {"ok": True}
 
 @app.delete("/api/panels/{panel_id}")
 def delete_panel(panel_id: str):
     repo.delete(panel_id)
     return {"ok": True}
 
-# --- TRAINING & PREDICTION ---
+# --- TRAINING ---
 
-@app.get("/api/panels/{panel_id}/predict")
-async def get_panel_prediction(panel_id: str, days: int = 7):
-    """Route die de UI aanroept voor de grafiek per paneel (Lost 404 op)."""
+@app.post("/api/panels/{panel_id}/train")
+async def train_panel(panel_id: str, days: int = 30):
+    """Traint zowel LightGBM (standaard) als XGBoost (uitdager)."""
     try:
-        forecast = await perform_prediction(panel_id, days)
-        return forecast
+        panel = repo.get(panel_id)
+        
+        # Haal data op
+        energy_df = await _fetch_panel_kwh_stats(panel, days=days)
+        meteo_df = meteo.fetch_history_days(
+            latitude=panel.latitude, 
+            longitude=panel.longitude,
+            days=days, 
+            tilt_deg=panel.tilt_deg, 
+            azimuth_deg=panel.azimuth_deg,
+        )
+        
+        # Join data
+        energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
+        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
+        train_df = energy_df.join(meteo_df, how="inner").dropna()
+        
+        if len(train_df) < 24:
+            raise HTTPException(status_code=400, detail="Te weinig data voor training.")
+
+        train_df = prepare_features_for_model(train_df, panel)
+        
+        # 1. Train LightGBM (Hoofdmodel)
+        metrics_lgb = ms.train(panel_id, train_df, model_type="lightgbm")
+        
+        # 2. Train XGBoost (Extra)
+        try:
+            ms.train(f"{panel_id}_xgb", train_df, model_type="xgboost")
+        except Exception as e:
+            print(f"Waarschuwing: XGBoost training mislukt: {e}")
+
+        return {"ok": True, "metrics": metrics_lgb}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -159,128 +202,76 @@ async def train_all_panels(days: int = 30):
     results = []
     for p in panels:
         try:
-            energy_df = await _fetch_panel_kwh_stats(p, days=days)
-            meteo_df = meteo.fetch_history_days(
-                latitude=p.latitude, longitude=p.longitude,
-                days=days, tilt_deg=p.tilt_deg, azimuth_deg=p.azimuth_deg,
-            )
-            energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
-            meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
-            
-            train_df = energy_df.join(meteo_df, how="inner").dropna()
-            
-            if len(train_df) >= 24:
-                train_df = add_time_features(train_df)
-                train_df = add_solar_position(train_df, p.latitude, p.longitude)
-                ms.train(p.panel_id, train_df)
-                results.append({"panel_id": p.panel_id, "status": "ok"})
-            else:
-                results.append({"panel_id": p.panel_id, "status": "insufficient_data"})
+            await train_panel(p.panel_id, days)
+            results.append({"panel_id": p.panel_id, "status": "ok"})
         except Exception as e:
             results.append({"panel_id": p.panel_id, "status": f"error: {str(e)}"})
     return {"trained_count": len(panels), "details": results}
 
-@app.post("/api/panels/{panel_id}/train")
-async def train_panel(panel_id: str, days: int = 30):
+# --- PREDICTION & EVALUATION ---
+
+@app.get("/api/panels/{panel_id}/predict")
+async def get_panel_prediction(panel_id: str, days: int = 7):
+    return await perform_prediction(panel_id, days)
+
+@app.get("/api/panels/{panel_id}/evaluate")
+async def evaluate_panel(panel_id: str, days: int = 7):
+    """Geeft vergelijking tussen Werkelijk, LightGBM en XGBoost."""
     try:
         panel = repo.get(panel_id)
-        energy_df = await _fetch_panel_kwh_stats(panel, days=days)
+        actual_df = await _fetch_panel_kwh_stats(panel, days=days)
         meteo_df = meteo.fetch_history_days(
-            latitude=panel.latitude, longitude=panel.longitude,
-            days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg,
+            panel.latitude, panel.longitude, days, panel.tilt_deg, panel.azimuth_deg
         )
-        energy_df.index = pd.to_datetime(energy_df.index, utc=True).floor("h")
-        meteo_df.index = pd.to_datetime(meteo_df.index, utc=True).floor("h")
-        train_df = energy_df.join(meteo_df, how="inner").dropna()
         
-        if len(train_df) < 24:
-            raise HTTPException(status_code=400, detail="Insufficient data.")
-
-        train_df = add_time_features(train_df)
-        train_df = add_solar_position(train_df, panel.latitude, panel.longitude)
+        df_eval = prepare_features_for_model(meteo_df, panel)
         
-        metrics = ms.train(panel_id, train_df)
-        return {"ok": True, "metrics": metrics}
+        # Modellen laden
+        trained_lgb = ms.load(panel_id)
+        trained_xgb = ms.load(f"{panel_id}_xgb")
+        
+        if not trained_lgb:
+            raise HTTPException(status_code=400, detail="Model niet getraind.")
+            
+        preds_lgb = ms.predict(trained_lgb, df_eval)
+        preds_xgb = ms.predict(trained_xgb, df_eval) if trained_xgb else [0.0] * len(preds_lgb)
+        
+        actual_dict = actual_df["kwh"].to_dict() if not actual_df.empty else {}
+        
+        comparison = []
+        for i, timestamp in enumerate(df_eval["time"]):
+            comparison.append({
+                "time": timestamp.isoformat(),
+                "actual": round(float(actual_dict.get(timestamp, 0.0)), 3),
+                "lgb": round(float(preds_lgb[i]), 3),
+                "xgb": round(float(preds_xgb[i]), 3)
+            })
+        return comparison
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/predict/total")
 async def get_total_prediction(days: int = 2):
-    """Voor evcc en uurbasis grafieken."""
     panels = repo.list()
     total_forecast = {}
     for p in panels:
         try:
             forecast = await perform_prediction(p.panel_id, days)
             for entry in forecast:
-                t = entry["time"]
-                k = entry["kwh"]
+                t, k = entry["time"], entry["kwh"]
                 total_forecast[t] = total_forecast.get(t, 0.0) + k
-        except Exception:
+        except:
             continue
-
     return [{"time": t, "kwh": round(total_forecast[t], 3)} for t in sorted(total_forecast.keys())]
 
 @app.get("/api/predict/total/daily")
 async def get_total_prediction_daily(days: int = 7):
-    """Voor Home Assistant: dagtotalen."""
     hourly_data = await get_total_prediction(days=days)
     daily_data = {}
     for entry in hourly_data:
         day = entry["time"].split("T")[0]
         daily_data[day] = daily_data.get(day, 0.0) + entry["kwh"]
-    
     return [{"date": d, "kwh": round(k, 2)} for d in sorted(daily_data.keys())]
-
-
-@app.get("/api/panels/{panel_id}/evaluate")
-async def evaluate_panel(panel_id: str, days: int = 7):
-    """Vergelijkt historische voorspelling met werkelijke opbrengst."""
-    try:
-        panel = repo.get(panel_id)
-        # 1. Haal werkelijke data op uit Home Assistant
-        actual_df = await _fetch_panel_kwh_stats(panel, days=days)
-        
-        # 2. Haal historische weerdata op voor dezelfde periode
-        meteo_df = meteo.fetch_history_days(
-            latitude=panel.latitude, longitude=panel.longitude,
-            days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
-        )
-        
-        # 3. Voer predictie uit op die historische weerdata
-        trained = ms.load(panel_id)
-        if not trained:
-            raise HTTPException(status_code=400, detail="Model niet getraind voor dit paneel.")
-            
-        df_eval = meteo_df.copy()
-        df_eval["time"] = pd.to_datetime(df_eval.index, utc=True)
-        # We simuleren de lags die het model verwacht
-        df_eval["kwh_lag_24"] = 0.0 
-        df_eval["gti_lag_24"] = df_eval["global_tilted_irradiance"].shift(24).fillna(0.0)
-        
-        df_eval = add_time_features(df_eval, "time")
-        df_eval = add_solar_position(df_eval, panel.latitude, panel.longitude)
-        
-        predictions = ms.predict(trained, df_eval)
-        
-        # 4. Combineer data voor de grafiek
-        comparison = []
-        # Maak van de actual_df een dictionary voor snelle lookup
-        actual_dict = actual_df["kwh"].to_dict() if not actual_df.empty else {}
-        
-        for timestamp, pred in zip(df_eval["time"], predictions):
-            actual = actual_dict.get(timestamp, 0.0)
-            comparison.append({
-                "time": timestamp.isoformat(),
-                "actual": round(float(actual), 3),
-                "predicted": round(float(pred), 3),
-                "error": round(float(pred - actual), 3)
-            })
-            
-        return comparison
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 # --- STATIC FILES ---
 
