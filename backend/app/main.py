@@ -232,6 +232,56 @@ async def get_total_prediction_daily(days: int = 7):
     
     return [{"date": d, "kwh": round(k, 2)} for d in sorted(daily_data.keys())]
 
+
+@app.get("/api/panels/{panel_id}/evaluate")
+async def evaluate_panel(panel_id: str, days: int = 7):
+    """Vergelijkt historische voorspelling met werkelijke opbrengst."""
+    try:
+        panel = repo.get(panel_id)
+        # 1. Haal werkelijke data op uit Home Assistant
+        actual_df = await _fetch_panel_kwh_stats(panel, days=days)
+        
+        # 2. Haal historische weerdata op voor dezelfde periode
+        meteo_df = meteo.fetch_history_days(
+            latitude=panel.latitude, longitude=panel.longitude,
+            days=days, tilt_deg=panel.tilt_deg, azimuth_deg=panel.azimuth_deg
+        )
+        
+        # 3. Voer predictie uit op die historische weerdata
+        trained = ms.load(panel_id)
+        if not trained:
+            raise HTTPException(status_code=400, detail="Model niet getraind voor dit paneel.")
+            
+        df_eval = meteo_df.copy()
+        df_eval["time"] = pd.to_datetime(df_eval.index, utc=True)
+        # We simuleren de lags die het model verwacht
+        df_eval["kwh_lag_24"] = 0.0 
+        df_eval["gti_lag_24"] = df_eval["global_tilted_irradiance"].shift(24).fillna(0.0)
+        
+        df_eval = add_time_features(df_eval, "time")
+        df_eval = add_solar_position(df_eval, panel.latitude, panel.longitude)
+        
+        predictions = ms.predict(trained, df_eval)
+        
+        # 4. Combineer data voor de grafiek
+        comparison = []
+        # Maak van de actual_df een dictionary voor snelle lookup
+        actual_dict = actual_df["kwh"].to_dict() if not actual_df.empty else {}
+        
+        for timestamp, pred in zip(df_eval["time"], predictions):
+            actual = actual_dict.get(timestamp, 0.0)
+            comparison.append({
+                "time": timestamp.isoformat(),
+                "actual": round(float(actual), 3),
+                "predicted": round(float(pred), 3),
+                "error": round(float(pred - actual), 3)
+            })
+            
+        return comparison
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- STATIC FILES ---
 
 static_path = Path("/opt/pv-panel-predictor/frontend")

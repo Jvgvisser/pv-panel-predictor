@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Model Evaluator</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+        .chart-container { height: 500px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Model Accuracy Evaluator</h1>
+        <div class="controls">
+            <select id="panelSelect"></select>
+            <button onclick="runEvaluation()">Analyze Last 7 Days</button>
+            <div id="metrics"></div>
+        </div>
+        <div class="chart-container">
+            <canvas id="evalChart"></canvas>
+        </div>
+    </div>
+
+<script>
+let evalChart;
+
+async function loadPanels() {
+    const panels = await fetch('/api/panels').then(r => r.json());
+    const select = document.getElementById('panelSelect');
+    panels.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.panel_id;
+        opt.textContent = p.friendly_name || p.panel_id;
+        select.appendChild(opt);
+    });
+}
+
+async function runEvaluation() {
+    const panelId = document.getElementById('panelSelect').value;
+    const data = await fetch(`/api/panels/${panelId}/evaluate?days=7`).then(r => r.json());
+    
+    const labels = data.map(d => new Date(d.time).toLocaleString());
+    const actuals = data.map(d => d.actual);
+    const preds = data.map(d => d.predicted);
+
+    // Bereken simpele foutmarge (MAE)
+    const mae = data.reduce((acc, curr) => acc + Math.abs(curr.error), 0) / data.length;
+    document.getElementById('metrics').innerHTML = `<strong>Mean Absolute Error:</strong> ${mae.toFixed(3)} kWh`;
+
+    if (evalChart) evalChart.destroy();
+    evalChart = new Chart(document.getElementById('evalChart'), {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                { label: 'Actual (HA)', data: actuals, borderColor: '#34a853', fill: false, tension: 0.3 },
+                { label: 'Predicted (ML)', data: preds, borderColor: '#1a73e8', borderDash: [5, 5], fill: false, tension: 0.3 }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+}
+
+loadPanels();
+</script>
+</body>
+</html>
