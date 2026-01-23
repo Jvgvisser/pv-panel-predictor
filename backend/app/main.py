@@ -184,16 +184,17 @@ async def train_panel(panel_id: str, days: int = 30):
         train_df = prepare_features_for_model(train_df, panel)
         
         # 1. Train LightGBM (Hoofdmodel)
+        print(f"DEBUG: Start LightGBM training voor {panel_id}")
         metrics_lgb = ms.train(panel_id, train_df, model_type="lightgbm")
         
-        # 2. Train XGBoost (Extra)
-        try:
-            ms.train(f"{panel_id}_xgb", train_df, model_type="xgboost")
-        except Exception as e:
-            print(f"Waarschuwing: XGBoost training mislukt: {e}")
+        # 2. Train XGBoost (DIT MOET WERKEN, ANDERS ERROR)
+        print(f"DEBUG: Start XGBoost training voor {panel_id}")
+        ms.train(f"{panel_id}_xgb", train_df, model_type="xgboost")
+        print(f"DEBUG: Alle modellen getraind voor {panel_id}")
 
         return {"ok": True, "metrics": metrics_lgb}
     except Exception as e:
+        print(f"DEBUG TRAINING FOUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/train/all")
