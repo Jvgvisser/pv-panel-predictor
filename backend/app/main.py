@@ -97,11 +97,14 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     result_df = (hourly_diff * panel.scale_to_kwh).to_frame(name="kwh").dropna()
     return result_df
 
-async def perform_prediction(panel_id: str, days: int):
-    """Voert de live voorspelling uit (gebruikt altijd het hoofdmodel)."""
+async def perform_prediction(panel_id: str, days: int, model_type: str = "lgbm"):
+    """Voert de live voorspelling uit met keuze voor model type."""
     panel = repo.get(panel_id)
-    trained = ms.load(panel_id)
+    # Kies het juiste bestand: panel_id.lgb of panel_id_xgb.xgb
+    suffix = "_xgb" if model_type == "xgb" else ""
+    model_id = f"{panel_id}{suffix}"
     
+    trained = ms.load(model_id)
     if not trained:
         return []
 
@@ -117,7 +120,6 @@ async def perform_prediction(panel_id: str, days: int):
     pred = ms.predict(trained, df)
     
     return [{"time": t.isoformat(), "kwh": float(y)} for t, y in zip(df["time"], pred)]
-
 # --- API ENDPOINTS ---
 
 @app.get("/api/config")
@@ -248,8 +250,8 @@ async def train_all_panels(days: int = 30):
     return {"ok": True}
 
 @app.get("/api/panels/{panel_id}/predict")
-async def get_panel_prediction(panel_id: str, days: int = 7):
-    return await perform_prediction(panel_id, days)
+async def get_panel_prediction(panel_id: str, days: int = 7, model_type: str = "lgbm"):
+    return await perform_prediction(panel_id, days, model_type)
 
 @app.get("/api/predict/total")
 async def get_total_prediction(days: int = 2, model_type: str = "lgbm"):

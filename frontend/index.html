@@ -37,7 +37,7 @@
         <h1>☀️ Solar Forecast Dashboard</h1>
         <div class="view-toggle">
             <a href="/ui/evaluate.html" class="btn btn-black">📊 View Evaluation</a>
-            <button id="btn-refresh" onclick="refreshData()">🔄 Refresh Data</button>
+            <button id="btn-refresh" onclick="refreshData()">🔄 Refresh Total</button>
             <button id="btn-2d" class="active" onclick="setView(2)">2 Days</button>
             <button id="btn-7d" onclick="setView(7)">7 Days</button>
         </div>
@@ -101,7 +101,6 @@ function setView(days) {
     refreshData();
 }
 
-// ... loadSettings, savePanel, trainAllPanels, trainPanel, etc. blijven hetzelfde ...
 async function loadSettings() {
     const config = await fetch('/api/config').then(r => r.json());
     document.getElementById('ha_url').value = config.ha_base_url || '';
@@ -122,20 +121,19 @@ async function loadSettings() {
             <td><input type="number" class="p-tilt" value="${p.tilt_deg}"></td>
             <td><input type="number" class="p-azi" value="${p.azimuth_deg}"></td>
             <td style="text-align: center;">
-                <button class="btn btn-green" onclick="savePanel('${p.panel_id}', this)">💾</button>
-                <button class="btn btn-orange" onclick="trainPanel('${p.panel_id}', 30)">🎓</button>
-                <button class="btn btn-blue" onclick="showSinglePanel('${p.panel_id}')">📈</button>
-                <button class="btn btn-red" onclick="deletePanel('${p.panel_id}')">🗑️</button>
+                <button class="btn btn-green" title="Save" onclick="savePanel('${p.panel_id}', this)">💾</button>
+                <button class="btn btn-orange" title="Train 30D" onclick="trainPanel('${p.panel_id}', 30)">🎓</button>
+                <button class="btn btn-blue" title="Show Chart" onclick="showSinglePanel('${p.panel_id}')">📈</button>
+                <button class="btn btn-red" title="Delete" onclick="deletePanel('${p.panel_id}')">🗑️</button>
             </td>`;
     });
 }
 
-// Aangepaste refreshData om beide modellen op te halen
 async function refreshData() {
     try {
         const [lgbRes, xgbRes] = await Promise.all([
-            fetch('/api/predict/total?model_type=lgbm').then(r => r.json()),
-            fetch('/api/predict/total?model_type=xgb').then(r => r.json())
+            fetch(`/api/predict/total?days=7&model_type=lgbm`).then(r => r.json()),
+            fetch(`/api/predict/total?days=7&model_type=xgb`).then(r => r.json())
         ]);
         
         let lgbMap = {}; lgbRes.forEach(p => lgbMap[p.time] = p.kwh);
@@ -146,11 +144,17 @@ async function refreshData() {
 }
 
 async function showSinglePanel(id) {
-    // Hier zou je specifieke panel-modellen kunnen ophalen indien de API dat ondersteunt
-    // Voor nu hergebruiken we de logica maar voor 1 paneel
-    const lgb = await fetch(`/api/panels/${id}/predict`).then(r => r.json());
-    let lgbMap = {}; lgb.forEach(p => lgbMap[p.time] = p.kwh);
-    updateChartsMulti(lgbMap, {}, `Panel ${id}`);
+    try {
+        const [lgbRes, xgbRes] = await Promise.all([
+            fetch(`/api/panels/${id}/predict?days=7&model_type=lgbm`).then(r => r.json()),
+            fetch(`/api/panels/${id}/predict?days=7&model_type=xgb`).then(r => r.json())
+        ]);
+
+        let lgbMap = {}; lgbRes.forEach(p => lgbMap[p.time] = p.kwh);
+        let xgbMap = {}; xgbRes.forEach(p => xgbMap[p.time] = p.kwh);
+        
+        updateChartsMulti(lgbMap, xgbMap, `Panel ${id}`);
+    } catch(e) { console.error("Error loading panel:", e); }
 }
 
 function updateChartsMulti(lgbData, xgbData, labelPrefix) {
@@ -166,12 +170,15 @@ function updateChartsMulti(lgbData, xgbData, labelPrefix) {
     const lgbValues = hourLabels.map(l => lgbData[l] || 0);
     const xgbValues = hourLabels.map(l => xgbData[l] || 0);
 
-    // Daily totals berekenen
+    // Bereken dagelijkse totalen voor de bar chart
     let dailyLGB = {}, dailyXGB = {};
     Object.keys(lgbData).forEach(l => {
         const d = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric'});
         dailyLGB[d] = (dailyLGB[d] || 0) + lgbData[l];
-        if(xgbData[l]) dailyXGB[d] = (dailyXGB[d] || 0) + xgbData[l];
+    });
+    Object.keys(xgbData).forEach(l => {
+        const d = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric'});
+        dailyXGB[d] = (dailyXGB[d] || 0) + xgbData[l];
     });
 
     if (mainChart) mainChart.destroy();
@@ -201,7 +208,6 @@ function updateChartsMulti(lgbData, xgbData, labelPrefix) {
     });
 }
 
-// ... overige functies (saveGlobalConfig, deletePanel, etc.) ...
 async function savePanel(id, btn) {
     const row = btn.parentElement.parentElement;
     const data = {
@@ -217,8 +223,8 @@ async function savePanel(id, btn) {
         "ha_token": document.getElementById('ha_token').value,
         "scale_to_kwh": 0.001
     };
-    await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
-    btn.innerText = "✅"; setTimeout(() => btn.innerText = "💾", 2000);
+    const response = await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+    if(response.ok) { btn.innerText = "✅"; setTimeout(() => btn.innerText = "💾", 2000); }
 }
 
 async function trainAllPanels(days) {
@@ -235,6 +241,13 @@ async function trainAllPanels(days) {
     }
     msg.innerText = "Success! All models trained.";
     setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
+    refreshData();
+}
+
+async function trainPanel(id, days) {
+    alert(`Training ${id}...`);
+    await fetch(`/api/panels/${id}/train?days=${days}`, {method: 'POST'});
+    alert(`Finished ${id}`);
     refreshData();
 }
 
