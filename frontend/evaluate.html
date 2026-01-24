@@ -26,6 +26,7 @@
         button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
 
         #chartWrapper { position: relative; height: 500px; width: 100%; margin-bottom: 30px; }
+        .bar-chart-wrapper { position: relative; height: 350px; width: 100%; margin-top: 40px; margin-bottom: 30px; }
         
         #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
         .stat-card { padding: 20px; border-radius: 12px; background: white; border: 1px solid #edf2f7; position: relative; overflow: hidden; }
@@ -37,6 +38,7 @@
         .xgb-ind { background: #ff3d00; }
 
         #loadingOverlay { display: none; margin-right: 15px; font-size: 0.9rem; color: #ff3d00; font-weight: 600; }
+        h2 { font-size: 1.1rem; color: #444; margin: 30px 0 15px 0; border-left: 4px solid #03a9f4; padding-left: 10px; }
     </style>
 </head>
 <body>
@@ -69,6 +71,7 @@
         <button onclick="loadEvaluation()">🔄 Ververs Analyse</button>
     </div>
 
+    <h2>Uurlijkse Voorspelling (kWh)</h2>
     <div id="chartWrapper">
         <canvas id="evalChart"></canvas>
     </div>
@@ -85,10 +88,15 @@
             <p id="maeXgb">--</p>
         </div>
     </div>
+
+    <h2>Totale Opbrengst per Dag (kWh)</h2>
+    <div class="bar-chart-wrapper">
+        <canvas id="barChart"></canvas>
+    </div>
 </div>
 
 <script>
-    let chart;
+    let chart, barChart;
 
     async function init() {
         try {
@@ -99,9 +107,7 @@
             panels.forEach(p => {
                 const opt = document.createElement('option');
                 opt.value = p.panel_id;
-                // Gebruik friendly name als deze bestaat, anders ID
-                const name = p.name || "Onbekend paneel";
-                opt.textContent = `${name} (${p.panel_id})`;
+                opt.textContent = p.name;
                 select.appendChild(opt);
             });
             if (panels.length > 0) loadEvaluation();
@@ -136,99 +142,86 @@
             const res = await fetch(`/api/panels/${panelId}/evaluate?days=${days}`);
             const data = await res.json();
 
+            // --- LIJN GRAFIEK DATA ---
             const labels = data.map(d => {
                 const date = new Date(d.time);
                 return date.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit' }) + 'u';
             });
-
             const actuals = data.map(d => d.actual);
             const lgbPreds = data.map(d => d.lgb);
             const xgbPreds = data.map(d => d.xgb);
 
-            // Bereken Mean Absolute Error
+            // MAE Berekening
             const maeLgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - lgbPreds[i]), 0) / data.length).toFixed(4);
             const maeXgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - xgbPreds[i]), 0) / data.length).toFixed(4);
-
             document.getElementById('maeLgb').textContent = `${maeLgb} kWh`;
             document.getElementById('maeXgb').textContent = `${maeXgb} kWh`;
 
-            if (chart) chart.destroy();
+            // Teken Lijn Grafiek
+            renderLineChart(labels, actuals, lgbPreds, xgbPreds);
+            
+            // Teken Staaf Grafiek (Per Dag)
+            renderBarChart(data);
 
-            const ctx = document.getElementById('evalChart').getContext('2d');
-            chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            label: 'Werkelijk',
-                            data: actuals,
-                            borderColor: '#2c3e50', // Donker antraciet voor werkelijke data
-                            backgroundColor: 'rgba(44, 62, 80, 0.03)',
-                            fill: true,
-                            tension: 0.4,
-                            pointRadius: 0,
-                            borderWidth: 1.2
-                        },
-                        {
-                            label: 'LightGBM',
-                            data: lgbPreds,
-                            borderColor: '#03a9f4', // Helder blauw
-                            borderDash: [5, 5],
-                            fill: false,
-                            tension: 0.4,
-                            pointRadius: 0,
-                            borderWidth: 1
-                        },
-                        {
-                            label: 'XGBoost',
-                            data: xgbPreds,
-                            borderColor: '#ff3d00', // Fel rood/oranje voor maximaal contrast
-                            borderDash: [2, 2],
-                            fill: false,
-                            tension: 0.4,
-                            pointRadius: 0,
-                            borderWidth: 1
-                        }
-                    ]
+        } catch (e) { console.error("Fout bij laden evaluatie:", e); }
+    }
+
+    function renderLineChart(labels, actuals, lgbPreds, xgbPreds) {
+        if (chart) chart.destroy();
+        const ctx = document.getElementById('evalChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'Werkelijk', data: actuals, borderColor: '#2c3e50', backgroundColor: 'rgba(44, 62, 80, 0.03)', fill: true, tension: 0.4, pointRadius: 0, borderWidth: 1.2 },
+                    { label: 'LightGBM', data: lgbPreds, borderColor: '#03a9f4', borderDash: [5, 5], fill: false, tension: 0.4, pointRadius: 0, borderWidth: 1 },
+                    { label: 'XGBoost', data: xgbPreds, borderColor: '#ff3d00', borderDash: [2, 2], fill: false, tension: 0.4, pointRadius: 0, borderWidth: 1 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'kWh / uur' } },
+                    x: { ticks: { maxTicksLimit: 15 } }
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { mode: 'index', intersect: false },
-                    scales: {
-                        y: { 
-                            beginAtZero: true, 
-                            grid: { color: '#f0f0f0', borderDash: [3, 3] },
-                            title: { display: true, text: 'kWh / uur', font: { weight: 'bold' } }
-                        },
-                        x: { 
-                            grid: { display: false },
-                            ticks: { maxTicksLimit: 15, font: { size: 11 } }
-                        }
-                    },
-                    plugins: {
-                        legend: { 
-                            position: 'top', 
-                            align: 'end',
-                            labels: { usePointStyle: true, boxWidth: 6, padding: 20, font: { size: 12 } } 
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                            titleColor: '#1a1a1a',
-                            bodyColor: '#1a1a1a',
-                            borderColor: '#ddd',
-                            borderWidth: 1,
-                            padding: 12,
-                            boxPadding: 6,
-                            usePointStyle: true
-                        }
-                    }
+                plugins: {
+                    legend: { position: 'top', align: 'end', labels: { usePointStyle: true, boxWidth: 6 } }
                 }
-            });
-        } catch (e) {
-            console.error("Fout bij laden evaluatie:", e);
-        }
+            }
+        });
+    }
+
+    function renderBarChart(data) {
+        const daily = {};
+        data.forEach(d => {
+            const date = new Date(d.time).toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' });
+            if (!daily[date]) daily[date] = { actual: 0, lgb: 0, xgb: 0 };
+            daily[date].actual += d.actual;
+            daily[date].lgb += d.lgb;
+            daily[date].xgb += d.xgb;
+        });
+
+        const labels = Object.keys(daily);
+        if (barChart) barChart.destroy();
+        const ctx = document.getElementById('barChart').getContext('2d');
+        barChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'Werkelijk Totaal', data: labels.map(l => daily[l].actual), backgroundColor: '#2c3e50', borderRadius: 4 },
+                    { label: 'LightGBM Totaal', data: labels.map(l => daily[l].lgb), backgroundColor: '#03a9f4', borderRadius: 4 },
+                    { label: 'XGBoost Totaal', data: labels.map(l => daily[l].xgb), backgroundColor: '#ff3d00', borderRadius: 4 }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'kWh / dag' } } }
+            }
+        });
     }
     
     init();

@@ -141,30 +141,30 @@ async def save_global_config(config: GlobalConfig):
 
 # --- PANEL MANAGEMENT ---
 
-@app.get("/api/panels")
-def list_panels():
-    panels = repo.list()
-    result = []
-    for p in panels:
-        p_dict = p.__dict__.copy()
-        
-        # We kijken eerst of er iets in 'friendly_name' staat
-        # Daarna pas in 'name', en anders gebruiken we de panel_id
-        display_name = p_dict.get('friendly_name') or p_dict.get('name')
-        
-        # Fallback als beide leeg zijn of de standaardwaarde hebben
-        if not display_name or str(display_name).strip() in ["", "Onbekend paneel", "None"]:
-            eid = p_dict.get('entity_id', '')
-            if "inverter_" in eid:
-                display_name = eid.split("inverter_")[1].split("_")[0]
-            else:
-                display_name = p_dict.get('panel_id')
+@app.get("/api/panels/{panel_id}/evaluate")
+def evaluate_panel(panel_id: str, days: int = 7):
+    if panel_id == "total_all":
+        panels = repo.list()
+        total_data = {}
 
-        # We zorgen dat de UI altijd 'name' gebruikt als weergaveveld
-        p_dict['name'] = display_name
-        result.append(p_dict)
+        for p in panels:
+            # Haal data op voor elk individueel paneel
+            p_data = repo.get_evaluation_data(p.panel_id, days)
+            for entry in p_data:
+                t = entry['time']
+                if t not in total_data:
+                    total_data[t] = {"time": t, "actual": 0.0, "lgb": 0.0, "xgb": 0.0}
+                
+                # Tel de opbrengst bij elkaar op
+                total_data[t]["actual"] += entry.get("actual", 0)
+                total_data[t]["lgb"] += entry.get("lgb", 0)
+                total_data[t]["xgb"] += entry.get("xgb", 0)
         
-    return result
+        # Sorteer op tijd en geef terug als lijst
+        return sorted(total_data.values(), key=lambda x: x['time'])
+    
+    # Als het een enkel paneel is, doe wat je normaal deed:
+    return repo.get_evaluation_data(panel_id, days)
 
 @app.post("/api/panels")
 def add_panel(panel: PanelConfig):
