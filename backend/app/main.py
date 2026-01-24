@@ -252,17 +252,33 @@ async def get_panel_prediction(panel_id: str, days: int = 7):
     return await perform_prediction(panel_id, days)
 
 @app.get("/api/predict/total")
-async def get_total_prediction(days: int = 2):
+async def get_total_prediction(days: int = 2, model_type: str = "lgbm"):
     panels = repo.list()
     total_forecast = {}
+    
+    # Bepaal de suffix op basis van de model_type parameter
+    suffix = "_xgb" if model_type == "xgb" else ""
+    
     for p in panels:
         try:
-            forecast = await perform_prediction(p.panel_id, days)
-            for entry in forecast:
-                t, k = entry["time"], entry["kwh"]
-                total_forecast[t] = total_forecast.get(t, 0.0) + k
+            # We laden specifiek het model dat gevraagd wordt
+            model_id = f"{p.panel_id}{suffix}"
+            trained = ms.load(model_id)
+            if not trained: continue
+
+            meteo_fc = meteo.fetch_hourly_forecast(
+                p.latitude, p.longitude, days, p.tilt_deg, p.azimuth_deg
+            )
+            df = prepare_features_for_model(meteo_fc, p)
+            pred = ms.predict(trained, df)
+            
+            for t, y in zip(df["time"], pred):
+                ts = t.isoformat()
+                total_forecast[ts] = total_forecast.get(ts, 0.0) + float(y)
         except: continue
+        
     return [{"time": t, "kwh": round(total_forecast[t], 3)} for t in sorted(total_forecast.keys())]
+
 
 @app.get("/api/predict/total/daily")
 async def get_total_prediction_daily(days: int = 7):
