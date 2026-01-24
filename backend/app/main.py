@@ -273,6 +273,55 @@ async def get_total_prediction_daily(days: int = 7):
         daily_data[day] = daily_data.get(day, 0.0) + entry["kwh"]
     return [{"date": d, "kwh": round(k, 2)} for d in sorted(daily_data.keys())]
 
+
+@app.get("/api/predict/evcc/lgb")
+async def get_evcc_forecast_lgb():
+    """Endpoint voor evcc gebruikmakend van LightGBM."""
+    return await _get_evcc_total_forecast(model_suffix="")
+
+@app.get("/api/predict/evcc/xgb")
+async def get_evcc_forecast_xgb():
+    """Endpoint voor evcc gebruikmakend van XGBoost."""
+    return await _get_evcc_total_forecast(model_suffix="_xgb")
+
+async def _get_evcc_total_forecast(model_suffix: str):
+    """Helper functie om alle panelen op te tellen voor een specifiek model type."""
+    panels = repo.list()
+    total_forecast = {}
+    
+    for p in panels:
+        try:
+            # Voor elk paneel het juiste model laden (lgb is de default/leeg, xgb heeft suffix)
+            model_id = f"{p.panel_id}{model_suffix}"
+            trained_model = ms.load(model_id)
+            
+            if not trained_model:
+                continue
+
+            # Weersverwachting ophalen
+            meteo_fc = meteo.fetch_hourly_forecast(
+                latitude=p.latitude, 
+                longitude=p.longitude,
+                days=2, 
+                tilt_deg=p.tilt_deg, 
+                azimuth_deg=p.azimuth_deg
+            )
+            
+            # Features voorbereiden (inclusief onze nieuwe temperatuur factor!)
+            df = prepare_features_for_model(meteo_fc, p)
+            preds = ms.predict(trained_model, df)
+            
+            for t, y in zip(df["time"], preds):
+                ts = t.isoformat()
+                total_forecast[ts] = total_forecast.get(ts, 0.0) + float(y)
+        except Exception as e:
+            print(f"Fout bij voorspelling voor {p.panel_id} ({model_suffix}): {e}")
+            continue
+
+    # Formatteer naar evcc standaard
+    return [{"time": t, "value": round(v, 3)} for t, v in sorted(total_forecast.items())]
+
+
 static_path = Path("/opt/pv-panel-predictor/frontend")
 if static_path.exists():
     app.mount("/ui", StaticFiles(directory=str(static_path), html=True), name="ui")
