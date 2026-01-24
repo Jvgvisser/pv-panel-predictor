@@ -10,13 +10,14 @@
         .container { max-width: 1300px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
         .card { border: 1px solid #eef0f2; padding: 20px; border-radius: 10px; margin-bottom: 25px; background: #fff; }
         .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .view-toggle { display: flex; gap: 10px; }
         .view-toggle button { background: #fff; border: 1px solid #d1d9e0; padding: 8px 16px; cursor: pointer; border-radius: 6px; font-weight: 600; transition: 0.2s; }
         .view-toggle button.active { background: #1a73e8; color: white; border-color: #1a73e8; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; }
         th, td { padding: 12px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
         th { background: #f8f9fa; color: #5f6368; text-transform: uppercase; }
         input { padding: 8px; border: 1px solid #dadce0; border-radius: 4px; width: 100%; box-sizing: border-box; }
-        .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; }
+        .btn { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
         .btn-blue { background: #1a73e8; color: white; }
         .btn-green { background: #34a853; color: white; }
         .btn-orange { background: #fbbc05; color: white; }
@@ -35,19 +36,20 @@
     <div class="chart-header">
         <h1>☀️ Solar Forecast Dashboard</h1>
         <div class="view-toggle">
-            <button id="btn-refresh" onclick="refreshData()">🔄 Refresh Total</button>
-            <button id="btn-2d" class="active" onclick="setView(2)">2 Days (Hourly)</button>
-            <button id="btn-7d" onclick="setView(7)">7 Days (Hourly)</button>
+            <a href="/ui/evaluate.html" class="btn btn-black">📊 View Evaluation</a>
+            <button id="btn-refresh" onclick="refreshData()">🔄 Refresh Data</button>
+            <button id="btn-2d" class="active" onclick="setView(2)">2 Days</button>
+            <button id="btn-7d" onclick="setView(7)">7 Days</button>
         </div>
     </div>
 
     <div class="card">
-        <h2 id="chart-title">Hourly Forecast (kWh)</h2>
+        <h2 id="chart-title">Hourly Forecast Comparison (kWh)</h2>
         <div class="chart-container"><canvas id="mainChart"></canvas></div>
     </div>
 
     <div class="card">
-        <h2 id="daily-chart-title">Daily Totals (7 Days)</h2>
+        <h2 id="daily-chart-title">Daily Totals Comparison (kWh)</h2>
         <div class="chart-container"><canvas id="dailyChart"></canvas></div>
     </div>
 
@@ -56,24 +58,14 @@
             <h3>Panel Management</h3>
             <button class="btn btn-black" onclick="trainAllPanels(365)">🚀 Train All Models (365 Days)</button>
         </div>
-
         <div id="training-status">
             <div id="training-msg">Starting full system training...</div>
             <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
         </div>
-
         <div style="overflow-x: auto;">
             <table>
                 <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Friendly Name</th>
-                        <th>HA Entity ID</th>
-                        <th>Wp</th>
-                        <th>Tilt</th>
-                        <th>Azi</th>
-                        <th style="text-align: center;">Actions</th>
-                    </tr>
+                    <tr><th>ID</th><th>Friendly Name</th><th>HA Entity ID</th><th>Wp</th><th>Tilt</th><th>Azi</th><th style="text-align: center;">Actions</th></tr>
                 </thead>
                 <tbody id="panels-body"></tbody>
             </table>
@@ -84,22 +76,10 @@
     <div class="card" style="background: #f8f9fa;">
         <h3>Global System & Location Settings</h3>
         <div class="grid">
-            <div>
-                <label style="font-size: 0.8em; font-weight: bold;">Home Assistant URL</label>
-                <input type="text" id="ha_url" placeholder="http://192.168.1.100:8123">
-            </div>
-            <div>
-                <label style="font-size: 0.8em; font-weight: bold;">HA Access Token</label>
-                <input type="password" id="ha_token" placeholder="Long-lived access token">
-            </div>
-            <div>
-                <label style="font-size: 0.8em; font-weight: bold;">Latitude (Breedtegraad)</label>
-                <input type="number" id="latitude" step="any" placeholder="bv. 52.3676">
-            </div>
-            <div>
-                <label style="font-size: 0.8em; font-weight: bold;">Longitude (Lengtegraad)</label>
-                <input type="number" id="longitude" step="any" placeholder="bv. 4.9041">
-            </div>
+            <div><label>HA URL</label><input type="text" id="ha_url"></div>
+            <div><label>HA Token</label><input type="password" id="ha_token"></div>
+            <div><label>Latitude</label><input type="number" id="latitude" step="any"></div>
+            <div><label>Longitude</label><input type="number" id="longitude" step="any"></div>
         </div>
         <button class="btn btn-green" style="margin-top:15px; width:100%;" onclick="saveGlobalConfig()">💾 Sync Settings & Location to All Panels</button>
     </div>
@@ -121,6 +101,7 @@ function setView(days) {
     refreshData();
 }
 
+// ... loadSettings, savePanel, trainAllPanels, trainPanel, etc. blijven hetzelfde ...
 async function loadSettings() {
     const config = await fetch('/api/config').then(r => r.json());
     document.getElementById('ha_url').value = config.ha_base_url || '';
@@ -141,15 +122,86 @@ async function loadSettings() {
             <td><input type="number" class="p-tilt" value="${p.tilt_deg}"></td>
             <td><input type="number" class="p-azi" value="${p.azimuth_deg}"></td>
             <td style="text-align: center;">
-                <button class="btn btn-green" title="Save" onclick="savePanel('${p.panel_id}', this)">💾</button>
-                <button class="btn btn-orange" title="Train 30D" onclick="trainPanel('${p.panel_id}', 30)">🎓</button>
-                <button class="btn btn-blue" title="Show Chart" onclick="showSinglePanel('${p.panel_id}')">📈</button>
-                <button class="btn btn-red" title="Delete" onclick="deletePanel('${p.panel_id}')">🗑️</button>
-            </td>
-        `;
+                <button class="btn btn-green" onclick="savePanel('${p.panel_id}', this)">💾</button>
+                <button class="btn btn-orange" onclick="trainPanel('${p.panel_id}', 30)">🎓</button>
+                <button class="btn btn-blue" onclick="showSinglePanel('${p.panel_id}')">📈</button>
+                <button class="btn btn-red" onclick="deletePanel('${p.panel_id}')">🗑️</button>
+            </td>`;
     });
 }
 
+// Aangepaste refreshData om beide modellen op te halen
+async function refreshData() {
+    try {
+        const [lgbRes, xgbRes] = await Promise.all([
+            fetch('/api/predict/total?model_type=lgbm').then(r => r.json()),
+            fetch('/api/predict/total?model_type=xgb').then(r => r.json())
+        ]);
+        
+        let lgbMap = {}; lgbRes.forEach(p => lgbMap[p.time] = p.kwh);
+        let xgbMap = {}; xgbRes.forEach(p => xgbMap[p.time] = p.kwh);
+        
+        updateChartsMulti(lgbMap, xgbMap, "Total System");
+    } catch(e) { console.error("Refresh error:", e); }
+}
+
+async function showSinglePanel(id) {
+    // Hier zou je specifieke panel-modellen kunnen ophalen indien de API dat ondersteunt
+    // Voor nu hergebruiken we de logica maar voor 1 paneel
+    const lgb = await fetch(`/api/panels/${id}/predict`).then(r => r.json());
+    let lgbMap = {}; lgb.forEach(p => lgbMap[p.time] = p.kwh);
+    updateChartsMulti(lgbMap, {}, `Panel ${id}`);
+}
+
+function updateChartsMulti(lgbData, xgbData, labelPrefix) {
+    const allLabels = Object.keys(lgbData).sort();
+    if(allLabels.length === 0) return;
+
+    const hourLabels = allLabels.slice(0, currentViewDays * 24);
+    const hourTimeLabels = hourLabels.map(l => {
+        const d = new Date(l);
+        return `${d.getHours()}:00 (${d.getDate()}-${d.getMonth()+1})`;
+    });
+
+    const lgbValues = hourLabels.map(l => lgbData[l] || 0);
+    const xgbValues = hourLabels.map(l => xgbData[l] || 0);
+
+    // Daily totals berekenen
+    let dailyLGB = {}, dailyXGB = {};
+    Object.keys(lgbData).forEach(l => {
+        const d = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric'});
+        dailyLGB[d] = (dailyLGB[d] || 0) + lgbData[l];
+        if(xgbData[l]) dailyXGB[d] = (dailyXGB[d] || 0) + xgbData[l];
+    });
+
+    if (mainChart) mainChart.destroy();
+    mainChart = new Chart(document.getElementById('mainChart'), {
+        type: 'line',
+        data: {
+            labels: hourTimeLabels,
+            datasets: [
+                { label: "LGBM (Blauw)", data: lgbValues, borderColor: "#1a73e8", backgroundColor: "rgba(26,115,232,0.1)", fill: true, tension: 0.3 },
+                { label: "XGBoost (Rood)", data: xgbValues, borderColor: "#ea4335", backgroundColor: "rgba(234,67,53,0.1)", fill: true, tension: 0.3 }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+    });
+
+    if (dailyChart) dailyChart.destroy();
+    dailyChart = new Chart(document.getElementById('dailyChart'), {
+        type: 'bar',
+        data: {
+            labels: Object.keys(dailyLGB),
+            datasets: [
+                { label: "LGBM Daily", data: Object.values(dailyLGB), backgroundColor: "#1a73e8" },
+                { label: "XGBoost Daily", data: Object.values(dailyXGB), backgroundColor: "#ea4335" }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+    });
+}
+
+// ... overige functies (saveGlobalConfig, deletePanel, etc.) ...
 async function savePanel(id, btn) {
     const row = btn.parentElement.parentElement;
     const data = {
@@ -165,8 +217,8 @@ async function savePanel(id, btn) {
         "ha_token": document.getElementById('ha_token').value,
         "scale_to_kwh": 0.001
     };
-    const response = await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
-    if(response.ok) { btn.innerText = "✅"; setTimeout(() => btn.innerText = "💾", 2000); }
+    await fetch('/api/panels', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+    btn.innerText = "✅"; setTimeout(() => btn.innerText = "💾", 2000);
 }
 
 async function trainAllPanels(days) {
@@ -186,71 +238,6 @@ async function trainAllPanels(days) {
     refreshData();
 }
 
-async function trainPanel(id, days) {
-    alert(`Training ${id}...`);
-    await fetch(`/api/panels/${id}/train?days=${days}`, {method: 'POST'});
-    alert(`Finished ${id}`);
-    refreshData();
-}
-
-async function refreshData() {
-    const panels = await fetch('/api/panels').then(r => r.json());
-    let combined = {};
-    for (const p of panels) {
-        try {
-            const res = await fetch(`/api/panels/${p.panel_id}/predict?days=7`);
-            const data = await res.json();
-            // FIX: data is een Array, geen object met .forecast
-            if(Array.isArray(data)) {
-                data.forEach(pt => { combined[pt.time] = (combined[pt.time] || 0) + pt.kwh; });
-            }
-        } catch(e) { console.error("Error loading panel data:", e); }
-    }
-    updateCharts(combined, "#1a73e8", "Total System");
-}
-
-async function showSinglePanel(id) {
-    const res = await fetch(`/api/panels/${id}/predict?days=7`);
-    const data = await res.json();
-    let single = {};
-    if(Array.isArray(data)) {
-        data.forEach(pt => { single[pt.time] = pt.kwh; });
-        updateCharts(single, "#fd7e14", `Panel ${id}`);
-    }
-}
-
-function updateCharts(dataDict, color, labelPrefix) {
-    const allLabels = Object.keys(dataDict).sort();
-    if(allLabels.length === 0) return;
-
-    const hourLabels = allLabels.slice(0, currentViewDays * 24);
-    const hourValues = hourLabels.map(l => dataDict[l]);
-    const hourTimeLabels = hourLabels.map(l => {
-        const d = new Date(l);
-        return `${d.getHours()}:00 (${d.getDate()}-${d.getMonth()+1})`;
-    });
-
-    let dailyTotals = {};
-    allLabels.forEach(l => {
-        const dateKey = new Date(l).toLocaleDateString('en-GB', { weekday:'short', day:'numeric'});
-        dailyTotals[dateKey] = (dailyTotals[dateKey] || 0) + dataDict[l];
-    });
-
-    if (mainChart) mainChart.destroy();
-    mainChart = new Chart(document.getElementById('mainChart'), {
-        type: 'bar',
-        data: { labels: hourTimeLabels, datasets: [{ label: labelPrefix + " (kWh/h)", data: hourValues, backgroundColor: color }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-    });
-
-    if (dailyChart) dailyChart.destroy();
-    dailyChart = new Chart(document.getElementById('dailyChart'), {
-        type: 'bar',
-        data: { labels: Object.keys(dailyTotals), datasets: [{ label: labelPrefix + " (Daily Total kWh)", data: Object.values(dailyTotals), backgroundColor: color }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-    });
-}
-
 async function saveGlobalConfig() {
     const data = { 
         ha_base_url: document.getElementById('ha_url').value, 
@@ -259,7 +246,7 @@ async function saveGlobalConfig() {
         longitude: parseFloat(document.getElementById('longitude').value)
     };
     await fetch('/api/config/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-    alert('Settings & Location synced across all panels.');
+    alert('Settings synced.');
     loadSettings();
 }
 
