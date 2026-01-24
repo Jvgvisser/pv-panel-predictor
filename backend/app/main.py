@@ -287,39 +287,45 @@ async def get_evcc_forecast_xgb():
 async def _get_evcc_total_forecast(model_suffix: str):
     """Helper functie om alle panelen op te tellen voor een specifiek model type."""
     panels = repo.list()
+    if not panels:
+        return []
+
     total_forecast = {}
     
+    # SNELHEID: Haal weersverwachting 1x op voor alle panelen (bespaart 5-10 seconden)
+    ref = panels[0]
+    try:
+        meteo_fc = meteo.fetch_hourly_forecast(
+            latitude=ref.latitude, 
+            longitude=ref.longitude,
+            days=2, 
+            tilt_deg=ref.tilt_deg, 
+            azimuth_deg=ref.azimuth_deg
+        )
+    except Exception as e:
+        print(f"Meteo error: {e}")
+        return []
+
     for p in panels:
         try:
-            # Voor elk paneel het juiste model laden (lgb is de default/leeg, xgb heeft suffix)
             model_id = f"{p.panel_id}{model_suffix}"
             trained_model = ms.load(model_id)
-            
             if not trained_model:
                 continue
 
-            # Weersverwachting ophalen
-            meteo_fc = meteo.fetch_hourly_forecast(
-                latitude=p.latitude, 
-                longitude=p.longitude,
-                days=2, 
-                tilt_deg=p.tilt_deg, 
-                azimuth_deg=p.azimuth_deg
-            )
-            
-            # Features voorbereiden (inclusief onze nieuwe temperatuur factor!)
+            # Gebruik de al opgehaalde meteo data, maar pas tilt/azimuth aan voor dit paneel
             df = prepare_features_for_model(meteo_fc, p)
             preds = ms.predict(trained_model, df)
             
             for t, y in zip(df["time"], preds):
-                ts = t.isoformat()
+                # Gebruik 'start' als key voor compatibiliteit met jouw evcc setup
+                ts = t.strftime("%Y-%m-%dT%H:%M:%SZ")
                 total_forecast[ts] = total_forecast.get(ts, 0.0) + float(y)
         except Exception as e:
-            print(f"Fout bij voorspelling voor {p.panel_id} ({model_suffix}): {e}")
             continue
 
-    # Formatteer naar evcc standaard
-    return [{"time": t, "value": round(v, 3)} for t, v in sorted(total_forecast.items())]
+    # Formatteer exact zoals jouw werkende grid/feedin tarieven
+    return [{"start": t, "value": round(v, 3)} for t, v in sorted(total_forecast.items())]
 
 
 static_path = Path("/opt/pv-panel-predictor/frontend")
