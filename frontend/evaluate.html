@@ -18,30 +18,29 @@
         
         select, input, button { padding: 10px 14px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; outline: none; }
         button { background: #1a1a1a; color: white; border: none; cursor: pointer; font-weight: 500; transition: all 0.2s; }
-        button:hover { background: #333; transform: translateY(-1px); }
+        button:hover { background: #333; }
         button.secondary { background: #ff3d00; }
         button:disabled { background: #ccc; cursor: not-allowed; }
 
-        .chart-main-wrapper { position: relative; height: 450px; width: 100%; margin-bottom: 40px; }
-        .chart-bar-wrapper { position: relative; height: 350px; width: 100%; margin-top: 20px; }
+        .chart-wrapper { position: relative; height: 450px; width: 100%; margin-bottom: 30px; }
         
-        #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 40px; }
+        #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .stat-card { padding: 20px; border-radius: 12px; background: white; border: 1px solid #edf2f7; position: relative; overflow: hidden; }
-        .stat-card h3 { margin: 0 0 10px 0; font-size: 0.9rem; color: #718096; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card h3 { margin: 0 0 10px 0; font-size: 0.9rem; color: #718096; text-transform: uppercase; }
         .stat-card p { font-size: 1.8rem; font-weight: 700; margin: 0; color: #2d3748; }
         
         .indicator { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
         .lgb-ind { background: #03a9f4; }
         .xgb-ind { background: #ff3d00; }
 
-        h2 { font-size: 1.2rem; color: #444; margin: 40px 0 20px 0; padding-left: 10px; border-left: 4px solid #03a9f4; }
+        h2 { font-size: 1.1rem; color: #444; margin: 40px 0 15px 0; border-left: 4px solid #03a9f4; padding-left: 10px; }
         #loadingOverlay { display: none; margin-right: 15px; font-size: 0.9rem; color: #ff3d00; font-weight: 600; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>Model Analyse & Systeemoverzicht</h1>
+    <h1>Model Analyse & Vergelijking</h1>
 
     <div class="train-section">
         <div>
@@ -49,26 +48,26 @@
             <span style="color: #7f8c8d; font-size: 0.9rem; margin-left: 10px;">Update alle modellen voor maximale precisie.</span>
         </div>
         <div>
-            <span id="loadingOverlay">⚡ Bezig met trainen...</span>
+            <span id="loadingOverlay">⚡ Modellen worden getraind...</span>
             <button class="secondary" id="trainBtn" onclick="trainAll(365)">🚀 Start 365d Training</button>
         </div>
     </div>
     
     <div class="controls">
         <div class="control-group" style="flex-grow: 1;">
-            <label>Selecteer Paneel of Totaal</label>
+            <label>Zonnepaneel</label>
             <select id="panelSelect"></select>
         </div>
         <div class="control-group">
             <label>Dagen</label>
-            <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 70px;">
+            <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 80px;">
         </div>
-        <button onclick="loadEvaluation()">🔄 Analyse Bijwerken</button>
+        <button onclick="loadEvaluation()">🔄 Ververs Analyse</button>
     </div>
 
-    <h2>Uurlijkse Details (kWh)</h2>
-    <div class="chart-main-wrapper">
-        <canvas id="lineChart"></canvas>
+    <h2>Uurlijkse Productie vs Voorspelling (kWh)</h2>
+    <div class="chart-wrapper">
+        <canvas id="evalChart"></canvas>
     </div>
 
     <div id="stats">
@@ -84,8 +83,8 @@
         </div>
     </div>
 
-    <h2>Dagelijkse Totalen: Werkelijk vs Modellen (kWh)</h2>
-    <div class="chart-bar-wrapper">
+    <h2>Totale Opbrengst per Dag (kWh)</h2>
+    <div class="chart-wrapper" style="height: 350px;">
         <canvas id="barChart"></canvas>
     </div>
 </div>
@@ -100,28 +99,25 @@
             const select = document.getElementById('panelSelect');
             select.innerHTML = '';
 
-            // 1. Voeg handmatig de TOTAAL optie toe
+            // Handmatig Totaal toevoegen
             const totalOpt = document.createElement('option');
             totalOpt.value = "total_all";
             totalOpt.textContent = "📊 TOTAAL (Alle 28 panelen)";
             select.appendChild(totalOpt);
 
-            // 2. Voeg de panelen toe
             panels.forEach(p => {
                 const opt = document.createElement('option');
                 opt.value = p.panel_id;
-                // Zoek naam in friendly_name of name
-                const displayName = p.friendly_name || p.name || p.panel_id;
-                opt.textContent = displayName;
+                opt.textContent = p.friendly_name || p.name || p.panel_id;
                 select.appendChild(opt);
             });
             
             loadEvaluation();
-        } catch (e) { console.error("Fout bij laden:", e); }
+        } catch (e) { console.error("Initialisatie fout:", e); }
     }
 
     async function trainAll(days) {
-        if (!confirm(`Batch training starten? Dit duurt even.`)) return;
+        if (!confirm(`Training starten voor ${days} dagen?`)) return;
         const btn = document.getElementById('trainBtn');
         const loader = document.getElementById('loadingOverlay');
         btn.disabled = true;
@@ -142,9 +138,9 @@
             const data = await res.json();
 
             // MAE Berekenen
-            const actuals = data.map(d => d.actual);
-            const lgbVal = data.map(d => d.lgb);
-            const xgbVal = data.map(d => d.xgb);
+            const actuals = data.map(d => d.actual || 0);
+            const lgbVal = data.map(d => d.lgb || 0);
+            const xgbVal = data.map(d => d.xgb || 0);
             
             const maeLgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - lgbVal[i]), 0) / data.length).toFixed(4);
             const maeXgb = (actuals.reduce((sum, a, i) => sum + Math.abs(a - xgbVal[i]), 0) / data.length).toFixed(4);
@@ -153,14 +149,14 @@
             document.getElementById('maeXgb').textContent = `${maeXgb} kWh`;
 
             renderCharts(data);
-        } catch (e) { console.error("Fout:", e); }
+        } catch (e) { console.error("Data laad fout:", e); }
     }
 
     function renderCharts(data) {
         const labels = data.map(d => new Date(d.time).toLocaleString('nl-NL', {day:'numeric', month:'short', hour:'2-digit'}) + 'u');
         
-        // --- LIJN GRAFIEK ---
-        const ctxL = document.getElementById('lineChart').getContext('2d');
+        // Lijn Grafiek
+        const ctxL = document.getElementById('evalChart').getContext('2d');
         if (lineChart) lineChart.destroy();
         lineChart = new Chart(ctxL, {
             type: 'line',
@@ -172,10 +168,10 @@
                     { label: 'XGBoost', data: data.map(d => d.xgb), borderColor: '#ff3d00', borderDash: [2,2], fill: false, tension: 0.4, pointRadius: 0 }
                 ]
             },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { align: 'end' } } }
+            options: { responsive: true, maintainAspectRatio: false }
         });
 
-        // --- STAAF GRAFIEK (DAGELIJKS) ---
+        // Staaf Grafiek (Dagelijks)
         const daily = {};
         data.forEach(d => {
             const dStr = new Date(d.time).toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric' });
@@ -196,7 +192,7 @@
                     { label: 'XGBoost', data: dLabels.map(l => daily[l].x), backgroundColor: '#ff3d00' }
                 ]
             },
-            options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+            options: { responsive: true, maintainAspectRatio: false }
         });
     }
 
