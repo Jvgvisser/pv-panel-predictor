@@ -45,27 +45,27 @@
     <div class="train-section">
         <div>
             <strong>Batch Training:</strong> 
-            <span style="color: #7f8c8d; font-size: 0.9rem; margin-left: 10px;">Update alle modellen.</span>
+            <span style="color: #7f8c8d; font-size: 0.9rem; margin-left: 10px;">Update alle modellen voor maximale precisie.</span>
         </div>
         <div>
-            <span id="loadingOverlay">⚡ Training...</span>
+            <span id="loadingOverlay">⚡ Modellen worden getraind...</span>
             <button class="secondary" id="trainBtn" onclick="trainAll(365)">🚀 Start 365d Training</button>
         </div>
     </div>
     
     <div class="controls">
         <div class="control-group" style="flex-grow: 1;">
-            <label>Paneel Selectie</label>
+            <label>Zonnepaneel / Systeem</label>
             <select id="panelSelect"></select>
         </div>
         <div class="control-group">
-            <label>Dagen</label>
+            <label>Aantal Dagen</label>
             <input type="number" id="daysInput" value="7" min="1" max="30" style="width: 80px;">
         </div>
-        <button onclick="loadEvaluation()">🔄 Ververs Analyse</button>
+        <button onclick="loadEvaluation()">🔄 Analyse Bijwerken</button>
     </div>
 
-    <h2>Uurlijkse Productie (kWh)</h2>
+    <h2>Uurlijkse Details (kWh per uur)</h2>
     <div class="chart-wrapper">
         <canvas id="evalChart"></canvas>
     </div>
@@ -73,17 +73,17 @@
     <div id="stats">
         <div class="stat-card">
             <div class="indicator lgb-ind"></div>
-            <h3>LightGBM MAE</h3>
+            <h3>LightGBM Error (MAE)</h3>
             <p id="maeLgb">--</p>
         </div>
         <div class="stat-card">
             <div class="indicator xgb-ind"></div>
-            <h3>XGBoost MAE</h3>
+            <h3>XGBoost Error (MAE)</h3>
             <p id="maeXgb">--</p>
         </div>
     </div>
 
-    <h2>Dagelijkse Totalen (kWh)</h2>
+    <h2>Dagelijkse Opbrengst (Totaal kWh)</h2>
     <div class="chart-wrapper">
         <canvas id="barChart"></canvas>
     </div>
@@ -93,20 +93,22 @@
     let lineChart = null;
     let barChart = null;
 
+    // Initialiseer de pagina en vul de dropdown
     async function init() {
         try {
-            console.log("Panelen ophalen...");
             const res = await fetch('/api/panels');
             const panels = await res.json();
             const select = document.getElementById('panelSelect');
             
             select.innerHTML = '';
-            // Totaal optie handmatig bovenaan
+            
+            // 1. Voeg handmatig de systeem-totaal optie toe
             const totalOpt = document.createElement('option');
             totalOpt.value = "total_all";
-            totalOpt.textContent = "📊 TOTAAL (Systeem)";
+            totalOpt.textContent = "📊 TOTAAL (Volledig Systeem)";
             select.appendChild(totalOpt);
 
+            // 2. Voeg alle individuele panelen toe
             panels.forEach(p => {
                 const opt = document.createElement('option');
                 opt.value = p.panel_id;
@@ -114,25 +116,28 @@
                 select.appendChild(opt);
             });
             
+            // Eerste data laden
             loadEvaluation();
-        } catch (e) { console.error("Fout in init:", e); }
+        } catch (e) { 
+            console.error("Fout bij laden panelen:", e); 
+        }
     }
 
+    // Haal evaluatie data op en bereken MAE
     async function loadEvaluation() {
         const panelId = document.getElementById('panelSelect').value;
         const days = document.getElementById('daysInput').value;
-        console.log(`Laden van data voor ${panelId}...`);
         
         try {
             const res = await fetch(`/api/panels/${panelId}/evaluate?days=${days}`);
             const data = await res.json();
 
             if (!data || data.length === 0) {
-                alert("Geen data gevonden voor deze periode.");
+                alert("Geen data gevonden voor dit paneel in deze periode.");
                 return;
             }
 
-            // MAE Berekenen
+            // MAE (Mean Absolute Error) Berekening
             const actuals = data.map(d => d.actual || 0);
             const lgbVal = data.map(d => d.lgb || 0);
             const xgbVal = data.map(d => d.xgb || 0);
@@ -145,12 +150,16 @@
 
             renderLineChart(data);
             renderBarChart(data);
-        } catch (e) { console.error("Fout in loadEvaluation:", e); }
+        } catch (e) { 
+            console.error("Fout bij ophalen data:", e); 
+        }
     }
 
+    // Teken de uurlijkse lijngrafiek
     function renderLineChart(data) {
         const ctx = document.getElementById('evalChart').getContext('2d');
         if (lineChart) lineChart.destroy();
+        
         lineChart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -161,10 +170,15 @@
                     { label: 'XGBoost', data: data.map(d => d.xgb), borderColor: '#ff3d00', borderDash: [2,2], fill: false, tension: 0.4, pointRadius: 0 }
                 ]
             },
-            options: { responsive: true, maintainAspectRatio: false }
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'top', align: 'end' } }
+            }
         });
     }
 
+    // Teken de dagelijkse staafgrafiek
     function renderBarChart(data) {
         const daily = {};
         data.forEach(d => {
@@ -178,6 +192,7 @@
         const labels = Object.keys(daily);
         const ctx = document.getElementById('barChart').getContext('2d');
         if (barChart) barChart.destroy();
+        
         barChart = new Chart(ctx, {
             type: 'bar',
             data: {
@@ -188,24 +203,35 @@
                     { label: 'XGBoost', data: labels.map(l => daily[l].x), backgroundColor: '#ff3d00' }
                 ]
             },
-            options: { responsive: true, maintainAspectRatio: false }
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
         });
     }
 
+    // Trigger batch training
     async function trainAll(days) {
+        if (!confirm(`Wil je de training voor alle modellen over ${days} dagen starten?`)) return;
+        
         const btn = document.getElementById('trainBtn');
+        const loader = document.getElementById('loadingOverlay');
         btn.disabled = true;
-        document.getElementById('loadingOverlay').style.display = 'inline';
+        loader.style.display = 'inline';
+        
         try {
             await fetch(`/api/train/all?days=${days}`, { method: 'POST' });
             loadEvaluation();
-        } catch (e) { alert("Fout bij trainen"); }
-        finally {
+        } catch (e) { 
+            alert("Er is een fout opgetreden tijdens de training."); 
+        } finally {
             btn.disabled = false;
-            document.getElementById('loadingOverlay').style.display = 'none';
+            loader.style.display = 'none';
         }
     }
 
+    // Start het script
     init();
 </script>
 </body>
