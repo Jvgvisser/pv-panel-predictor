@@ -32,18 +32,36 @@ class GlobalConfig(BaseModel):
 # --- HELPER FUNCTIONS ---
 
 def prepare_features_for_model(df_in, panel):
+    """
+    Centrale functie voor feature engineering.
+    Nu met temperatuur-correctie om winter-onderschatting tegen te gaan.
+    """
     df = df_in.copy()
     if "time" not in df.columns:
         df["time"] = pd.to_datetime(df.index, utc=True)
     
+    # Voeg lags en tijd features toe
     df["kwh_lag_24"] = 0.0 
     df["gti_lag_24"] = df["global_tilted_irradiance"].shift(24).fillna(0.0)
     
+    # Basis tijd en zon-positie features
     df = add_time_features(df, "time")
     df = add_solar_position(df, panel.latitude, panel.longitude)
+
+    # TEMPERATUUR FACTOR:
+    # Panelen presteren beter bij kou. We maken een boost-factor gebaseerd op STC (25°C).
+    if "temperature_2m" in df.columns:
+        # Hoe kouder dan 25 graden, hoe hoger de factor
+        df["temp_efficiency_boost"] = 25 - df["temperature_2m"]
+        # Interactie: Zonkracht wordt effectiever als het koud is
+        df["sun_temp_interaction"] = df["global_tilted_irradiance"] * df["temp_efficiency_boost"]
+    else:
+        df["sun_temp_interaction"] = 0.0
+
     return df
 
 async def _fetch_panel_kwh_stats(panel, days: int):
+    """Haalt de werkelijke kWh opbrengst uit Home Assistant Statistics."""
     ws = HAStatsWSClient(base_url=panel.ha_base_url, token=panel.ha_token)
     now_dt = datetime.now(timezone.utc)
     
@@ -80,6 +98,7 @@ async def _fetch_panel_kwh_stats(panel, days: int):
     return result_df
 
 async def perform_prediction(panel_id: str, days: int):
+    """Voert de live voorspelling uit (gebruikt altijd het hoofdmodel)."""
     panel = repo.get(panel_id)
     trained = ms.load(panel_id)
     
@@ -148,13 +167,11 @@ def delete_panel(panel_id: str):
 async def evaluate_panel(panel_id: str, days: int = 7):
     """Eén centrale functie voor zowel individuele panelen als het systeem-totaal."""
     
-    # CASE 1: HET SYSTEEM TOTAAL (Samenvoegen van alle 28 panelen)
     if panel_id == "total_all":
         all_panels = repo.list()
         combined = {}
         for p in all_panels:
             try:
-                # We roepen de evaluate logica aan voor elk paneel
                 data = await evaluate_panel(p.panel_id, days)
                 for d in data:
                     t = d['time']
@@ -167,7 +184,6 @@ async def evaluate_panel(panel_id: str, days: int = 7):
                 continue
         return sorted(combined.values(), key=lambda x: x['time'])
 
-    # CASE 2: INDIVIDUEEL PANEEL (De originele ML evaluatie logica)
     try:
         panel = repo.get(panel_id)
         actual_df = await _fetch_panel_kwh_stats(panel, days=days)
@@ -181,7 +197,7 @@ async def evaluate_panel(panel_id: str, days: int = 7):
         trained_xgb = ms.load(f"{panel_id}_xgb")
         
         if not trained_lgb:
-            return [] # Model nog niet klaar
+            return []
             
         preds_lgb = ms.predict(trained_lgb, df_eval)
         preds_xgb = ms.predict(trained_xgb, df_eval) if trained_xgb else [0.0] * len(preds_lgb)
