@@ -141,29 +141,32 @@ async def save_global_config(config: GlobalConfig):
 
 # --- PANEL MANAGEMENT ---
 
+@app.get("/api/panels")
+def list_panels():
+    # Puur de lijst zoals de database hem geeft. Geen aanpassingen.
+    panels = repo.list()
+    return [p.__dict__ for p in panels]
+
 @app.get("/api/panels/{panel_id}/evaluate")
 def evaluate_panel(panel_id: str, days: int = 7):
+    # Als we 'total_all' aanvragen, tellen we hier de boel bij elkaar op
     if panel_id == "total_all":
-        panels = repo.list()
-        total_data = {}
-
-        for p in panels:
-            # Haal data op voor elk individueel paneel
-            p_data = repo.get_evaluation_data(p.panel_id, days)
-            for entry in p_data:
-                t = entry['time']
-                if t not in total_data:
-                    total_data[t] = {"time": t, "actual": 0.0, "lgb": 0.0, "xgb": 0.0}
-                
-                # Tel de opbrengst bij elkaar op
-                total_data[t]["actual"] += entry.get("actual", 0)
-                total_data[t]["lgb"] += entry.get("lgb", 0)
-                total_data[t]["xgb"] += entry.get("xgb", 0)
-        
-        # Sorteer op tijd en geef terug als lijst
-        return sorted(total_data.values(), key=lambda x: x['time'])
+        all_panels = repo.list()
+        combined = {}
+        for p in all_panels:
+            try:
+                data = repo.get_evaluation_data(p.panel_id, days)
+                for d in data:
+                    t = d['time']
+                    if t not in combined:
+                        combined[t] = {"time": t, "actual": 0, "lgb": 0, "xgb": 0}
+                    combined[t]["actual"] += d.get("actual", 0)
+                    combined[t]["lgb"] += d.get("lgb", 0)
+                    combined[t]["xgb"] += d.get("xgb", 0)
+            except: continue
+        return sorted(combined.values(), key=lambda x: x['time'])
     
-    # Als het een enkel paneel is, doe wat je normaal deed:
+    # Voor de rest: gewoon de data van het paneel
     return repo.get_evaluation_data(panel_id, days)
 
 @app.post("/api/panels")
